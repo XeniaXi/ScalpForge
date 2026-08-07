@@ -50,5 +50,6 @@ powershell.exe -ExecutionPolicy Bypass -File .\ops\windows\Install-ScalpForgeNew
 Start-ScheduledTask -TaskName "ScalpForge-News-Collector"
 ```
 
-GDELT may return HTTP 429 when its public service is busy. The scheduled task will try again at the
-next interval; never increase request frequency in response to throttling.
+GDELT may return HTTP 429 when its public service is busy. This is recorded as `throttled` in
+`data/normalized/news/health.latest.json`; the scheduled task then tries again at the next interval.
+Never increase request frequency in response to throttling.

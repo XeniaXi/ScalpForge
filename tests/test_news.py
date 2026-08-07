@@ -2,7 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from scalpforge_core.models import MarketTick
 from scalpforge_news.attribution import measure_reactions
-from scalpforge_news.cli import _write_jsonl
+from scalpforge_news.cli import _write_health, _write_jsonl
 from scalpforge_news.dedup import deduplicate
 from scalpforge_news.gdelt import normalize
 from scalpforge_news.models import NormalizedEvent
@@ -89,3 +89,11 @@ def test_jsonl_writer_preserves_prior_unique_events(tmp_path) -> None:
     _write_jsonl(path, [first])
     _write_jsonl(path, [first, second])
     assert len(path.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_news_health_records_throttling(tmp_path) -> None:
+    output = tmp_path / "events.jsonl"
+    _write_health(output, "throttled", provider="gdelt", http_status=429)
+    health = (tmp_path / "health.latest.json").read_text(encoding="utf-8")
+    assert '"status": "throttled"' in health
+    assert '"http_status": 429' in health
