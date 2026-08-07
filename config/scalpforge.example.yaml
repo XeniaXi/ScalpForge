@@ -1,0 +1,20 @@
+instrument: XAUUSD
+bar_intervals: ["1s", "5s", "1m", "5m"]
+trading_mode: paper
+strategy:
+  min_signal_score: 0.65
+  require_regime_confidence: 0.60
+  abstain_on_unknown_catalyst: false
+risk:
+  max_risk_per_trade_pct: 0.25
+  max_daily_loss_pct: 1.0
+  max_drawdown_pct: 5.0
+  max_spread_bps: 8.0
+  max_price_age_ms: 1500
+execution:
+  mt4_bridge_enabled: false
+  slippage_model: empirical
+  commission_per_lot: 0.0
+news:
+  attribution_windows_seconds: [5, 30, 60, 300, 900]
+  retain_raw_payloads: true
