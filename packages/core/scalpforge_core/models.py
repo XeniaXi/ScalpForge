@@ -14,6 +14,8 @@ class Side(StrEnum):
 class EventKind(StrEnum):
     MARKET_TICK = "market_tick"
     NEWS = "news"
+    SCHEDULED_RELEASE = "scheduled_release"
+    WORLD_EVENT = "world_event"
 
 
 class EventEnvelope(BaseModel):
@@ -63,6 +65,12 @@ class NewsEvent(BaseModel):
     actual: float | None = None
     previous: float | None = None
     raw_reference: str | None = None
+    received_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    url: str | None = None
+    language: str | None = None
+    source_country: str | None = None
+    relevance_score: float = Field(default=0, ge=0, le=1)
+    relevance_reasons: list[str] = Field(default_factory=list)
 
 
 class CausalHypothesis(BaseModel):

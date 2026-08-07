@@ -18,3 +18,6 @@ execution:
 news:
   attribution_windows_seconds: [5, 30, 60, 300, 900]
   retain_raw_payloads: true
+  gdelt_query: '(gold OR XAU OR bullion OR "Federal Reserve" OR FOMC OR inflation OR Treasury OR sanctions OR war) sourcelang:english'
+  minimum_relevance_score: 0.43
+  causal_labels_are_candidates_only: true

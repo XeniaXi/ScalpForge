@@ -73,6 +73,10 @@ scalpforge-compare-feeds data/avatrade_ticks.csv data/other_ticks.csv \
 The recorder rotates its files daily in UTC and uses restart-safe session IDs. A read-only collector
 creates SHA-256-addressed snapshots and a health report. See the [Windows RDP setup](docs/RDP_SETUP.md).
 
+Phase 1B adds evidence-only [news and world-event attribution](docs/news-attribution.md). GDELT
+reporting and FRED/ALFRED macro vintages are archived with hashes, normalized without sentiment-to-
+trade shortcuts, and aligned to broker ticks using explicit reaction windows.
+
 ## Repository layout
 
 ```text

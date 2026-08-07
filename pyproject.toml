@@ -26,6 +26,7 @@ scalpforge-import-ticks = "scalpforge_data.cli:main"
 scalpforge-backtest = "scalpforge_backtest.cli:main"
 scalpforge-compare-feeds = "scalpforge_broker.cli:main"
 scalpforge-collect = "scalpforge_collector.cli:main"
+scalpforge-ingest-news = "scalpforge_news.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = [
@@ -41,10 +42,11 @@ packages = [
   "packages/backtest/scalpforge_backtest",
   "packages/broker/scalpforge_broker",
   "packages/collector/scalpforge_collector",
+  "packages/news/scalpforge_news",
 ]
 
 [tool.pytest.ini_options]
-pythonpath = ["apps/api", "apps/worker", "packages/core", "packages/storage", "packages/strategy", "packages/risk", "packages/execution", "packages/data", "packages/replay", "packages/backtest", "packages/broker", "packages/collector"]
+pythonpath = ["apps/api", "apps/worker", "packages/core", "packages/storage", "packages/strategy", "packages/risk", "packages/execution", "packages/data", "packages/replay", "packages/backtest", "packages/broker", "packages/collector", "packages/news"]
 testpaths = ["tests"]
 
 [tool.ruff]

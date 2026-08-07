@@ -14,7 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Snapshot and monitor read-only MT4 tick files")
     parser.add_argument("--source", type=Path)
     parser.add_argument("--source-dir", type=Path)
-    parser.add_argument("--prefix", default="scalpforge_v3")
+    parser.add_argument("--prefix", default="scalpforge")
     parser.add_argument("--symbol", default="GOLD")
     parser.add_argument("--archive", type=Path, default=Path("data/raw/avatrade/GOLD"))
     parser.add_argument("--stale-seconds", type=int, default=120)

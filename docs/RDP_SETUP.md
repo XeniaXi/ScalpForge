@@ -29,7 +29,7 @@ or place orders.
    ```
 
 4. Compile and attach `ScalpForgeRecorder.mq4` to a `GOLD` chart. Set `OutputPrefix` to
-   `scalpforge_v3`. Keep MT4's **AutoTrading button disabled**.
+   `scalpforge` (the default). Keep MT4's **AutoTrading button disabled**.
 5. Sign out and back in once, or manually start the `ScalpForge-Demo-Collector` task.
 6. Run `Test-ScalpForgeRdp.ps1` with the same paths. All checks should be `True`;
    AutoTrading is intentionally not required.

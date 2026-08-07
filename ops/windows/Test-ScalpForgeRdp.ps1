@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)] [string] $ProjectRoot,
     [Parameter(Mandatory = $true)] [string] $Mt4DataRoot,
-    [string] $OutputPrefix = "scalpforge_v3",
+    [string] $OutputPrefix = "scalpforge",
     [string] $Symbol = "GOLD"
 )
 
