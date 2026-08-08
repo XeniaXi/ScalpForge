@@ -6,6 +6,7 @@ from scalpforge_strategy.council import (
     ResearchCouncil,
     default_advisor_mandates,
 )
+from scalpforge_strategy.outcomes import OutcomeConfig, OutcomeDatasetManifest
 from scalpforge_strategy.portfolio import (
     StrategyPortfolioLab,
     VirtualStrategyLedger,
@@ -22,6 +23,8 @@ from scalpforge_strategy.research_dataset import (
 __all__ = [
     "AdvisorMandate",
     "FeatureConfig",
+    "OutcomeConfig",
+    "OutcomeDatasetManifest",
     "PointInTimeFeatureBuilder",
     "PromotionDecision",
     "PromotionEvidence",
