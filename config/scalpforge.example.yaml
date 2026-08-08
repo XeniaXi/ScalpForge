@@ -5,6 +5,19 @@ strategy:
   min_signal_score: 0.65
   require_regime_confidence: 0.60
   abstain_on_unknown_catalyst: false
+research:
+  virtual_strategy_initial_equity: 50.0
+  strategy_families:
+    - momentum
+    - mean_reversion
+    - breakout
+    - volatility_expansion
+    - liquidity_reversal
+    - trend_continuation
+    - news_reaction
+    - post_news_reversal
+    - microstructure
+  arbitrary_daily_trade_cap: null
 risk:
   max_risk_per_trade_pct: 0.25
   max_daily_loss_pct: 1.0

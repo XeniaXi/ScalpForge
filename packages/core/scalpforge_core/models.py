@@ -130,3 +130,51 @@ class DecisionRecord(BaseModel):
     execution_mode: str = "paper"
     config_version: str
     status: str
+
+
+class OpportunityDecision(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    ABSTAINED = "abstained"
+
+
+class StrategyOpportunity(BaseModel):
+    """Point-in-time strategy proposal, including proposals that never become trades."""
+
+    opportunity_id: UUID = Field(default_factory=uuid4)
+    occurred_at: datetime
+    strategy_id: str = Field(min_length=1)
+    strategy_family: str = Field(min_length=1)
+    instrument: str = "XAUUSD"
+    side: Side
+    score: float = Field(ge=0, le=1)
+    regime: str
+    regime_confidence: float = Field(ge=0, le=1)
+    decision: OpportunityDecision
+    rejection_reasons: list[str] = Field(default_factory=list)
+    estimated_cost_bps: float = Field(ge=0)
+    exit_policy_id: str = Field(min_length=1)
+    target_return_bps: float | None = Field(default=None, gt=0)
+    target_reward_r: float | None = Field(default=None, gt=0)
+    feature_snapshot: dict[str, float | str | bool] = Field(default_factory=dict)
+    dataset_version: str
+    model_version: str
+    config_version: str
+
+    def model_post_init(self, __context: object) -> None:
+        if self.decision is OpportunityDecision.APPROVED and self.rejection_reasons:
+            raise ValueError("approved opportunities cannot have rejection reasons")
+        if self.decision is OpportunityDecision.REJECTED and not self.rejection_reasons:
+            raise ValueError("rejected opportunities require at least one reason")
+
+
+class OpportunityOutcome(BaseModel):
+    """Outcome joined later so future information never enters the decision record."""
+
+    opportunity_id: UUID
+    evaluated_at: datetime
+    horizon_seconds: int = Field(gt=0)
+    return_bps: float
+    maximum_favorable_bps: float
+    maximum_adverse_bps: float
+    net_return_after_costs_bps: float

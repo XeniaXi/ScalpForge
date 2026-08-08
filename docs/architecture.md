@@ -13,6 +13,12 @@ ScalpForge optimizes expected value after spread, slippage, fees, adverse select
 5. **Risk governor** is independent of strategy scoring and fails closed. It owns exposure, loss, drawdown, freshness, spread, sizing, stop validity, and kill-switch policy.
 6. **Execution** receives only approved intents. Paper is the default. The MT4 port is isolated so a future Windows-side Expert Advisor/bridge can exchange idempotent commands and acknowledgements without embedding strategy logic.
 7. **Observability/journal** records latency, gaps, drift, rejects, fills, P&L decomposition, configuration/model/data versions, and the evidence behind every decision.
+8. **Strategy portfolio lab** runs transparent strategy families as isolated virtual traders. It
+   journals approved, rejected, and abstained opportunities and forbids capital or outcome leakage
+   between strategies. A later ensemble may allocate only from frozen out-of-sample evidence.
+9. **Exit-policy experiments** identify every target/stop/trailing/time-exit variant explicitly.
+   Dollar targets are normalized to basis points and `R` before comparison so balance and lot size
+   cannot masquerade as strategy edge.
 
 ```mermaid
 flowchart LR
