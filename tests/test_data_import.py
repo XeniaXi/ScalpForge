@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 import pytest
-from scalpforge_data import HistoricalCsvNormalizer, TickCsvImporter
+from scalpforge_data import HistoricalCsvNormalizer, TickCsvImporter, merge_side_exports
 from scalpforge_replay import ParquetTickReplaySource
 
 
@@ -95,3 +95,38 @@ def test_historical_normalizer_requires_ordered_ticks(tmp_path: Path) -> None:
             source_timezone="UTC",
         )
     assert not (tmp_path / "curated").exists()
+
+
+def test_dukas_side_exports_merge_with_dual_provenance(tmp_path: Path) -> None:
+    header = "Etc/UTC,Open,High,Low,Close,Volume\n"
+    ask = tmp_path / "ask.csv"
+    bid = tmp_path / "bid.csv"
+    ask.write_text(
+        header + "2026-08-03T12:00:01+00:00,4062.8,4062.8,4062.8,4062.8,120\n",
+        encoding="utf-8",
+    )
+    bid.write_text(
+        header + "2026-08-03T12:00:01+00:00,4062.4,4062.4,4062.4,4062.4,180\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "merged.csv"
+    manifest = merge_side_exports(ask, bid, output)
+    assert manifest.row_count == 1
+    assert manifest.ask_sha256 != manifest.bid_sha256
+    assert output.read_text(encoding="utf-8").splitlines()[1].startswith(
+        "2026-08-03T12:00:01+00:00,4062.4,4062.8"
+    )
+    assert output.with_suffix(".csv.merge.json").is_file()
+
+
+def test_dukas_side_exports_refuse_misalignment(tmp_path: Path) -> None:
+    header = "Etc/UTC,Open,High,Low,Close,Volume\n"
+    ask = tmp_path / "ask.csv"
+    bid = tmp_path / "bid.csv"
+    ask.write_text(header + "2026-08-03T12:00:01+00:00,2,2,2,2,1\n", encoding="utf-8")
+    bid.write_text(header + "2026-08-03T12:00:02+00:00,1,1,1,1,1\n", encoding="utf-8")
+    output = tmp_path / "merged.csv"
+    with pytest.raises(ValueError, match="do not align"):
+        merge_side_exports(ask, bid, output)
+    assert not output.exists()
+    assert not output.with_suffix(".csv.partial").exists()

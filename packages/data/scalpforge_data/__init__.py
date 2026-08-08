@@ -1,5 +1,6 @@
 """Data ingestion and quality tooling."""
 
+from scalpforge_data.dukascopy import DukascopyMergeManifest, merge_side_exports
 from scalpforge_data.historical import (
     HistoricalCsvNormalizer,
     HistoricalImportManifest,
@@ -16,4 +17,6 @@ __all__ = [
     "QualityIssue",
     "TickCsvImporter",
     "TickQualityValidator",
+    "DukascopyMergeManifest",
+    "merge_side_exports",
 ]

@@ -13,6 +13,18 @@ AvaTrade quotes.
 Every import requires an explicit provider, venue, and source timezone. Never guess whether an
 export is UTC or broker-server time.
 
+Dukascopy may export the quote stream as separate ASK and BID CSV files. Merge only a matching pair:
+
+```powershell
+.\.venv\Scripts\scalpforge-merge-dukascopy.exe `
+  --ask C:\path\XAU-USD_ASK.csv `
+  --bid C:\path\XAU-USD_BID.csv `
+  --output C:\ScalpForge\data\raw\historical\dukascopy\xauusd_ticks.csv
+```
+
+The merger streams both files in lockstep and refuses different row counts, timestamp mismatches,
+crossed quotes, or non-flat OHLC bars. Its sidecar manifest preserves both source checksums.
+
 ```powershell
 .\.venv\Scripts\scalpforge-import-ticks.exe `
   C:\ScalpForge\data\raw\historical\dukascopy\xauusd.csv `
