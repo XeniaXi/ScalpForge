@@ -48,3 +48,22 @@ scalpforge-quality dataset
 The command never edits raw CSV files. It writes Zstandard-compressed daily Parquet partitions and
 a manifest under `data/curated/ticks/<dataset-id>/`. Re-running identical inputs resolves to the same
 dataset ID.
+
+## Legacy archive cleanup
+
+Early collector versions copied the complete growing CSV every minute. Audit redundant snapshots
+without deleting anything:
+
+```powershell
+scalpforge-quality prune-legacy
+```
+
+After reviewing the report, explicit deletion requires:
+
+```powershell
+scalpforge-quality prune-legacy --apply
+```
+
+The cleanup verifies every candidate checksum, rejects paths outside the archive, preserves the
+largest complete legacy snapshot per source/day, preserves every incremental chunk, and refuses to
+apply if any inspected legacy entry is invalid.

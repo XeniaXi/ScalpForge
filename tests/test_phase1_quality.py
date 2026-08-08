@@ -9,6 +9,7 @@ from scalpforge_collector.schedule import is_gold_market_open
 from scalpforge_news.models import NormalizedEvent
 from scalpforge_quality.dataset import build_parquet_dataset
 from scalpforge_quality.news_report import build_news_quality_report
+from scalpforge_quality.prune import prune_legacy_snapshots
 from scalpforge_quality.tick_report import build_tick_quality_report
 
 HEADER = (
@@ -117,3 +118,43 @@ def test_news_quality_report(tmp_path: Path) -> None:
     assert report.unique_event_count == 1
     assert report.relevance_categories == {"gold": 1, "usd_yields": 1}
     assert report.current_health == "healthy"
+
+
+def test_legacy_prune_is_dry_run_and_preserves_chunks(tmp_path: Path) -> None:
+    archive = tmp_path / "raw"
+    folder = archive / "2026" / "08" / "07"
+    folder.mkdir(parents=True)
+    source = "C:/Common/Files/scalpforge_GOLD_20260807_ticks.csv"
+    legacy_paths = []
+    for index, row_count in enumerate((10, 20, 30)):
+        snapshot = folder / f"legacy_{index}.csv"
+        snapshot.write_text(HEADER + _row("2026.08.07 10:00:00", "s", index), encoding="utf-8")
+        digest = hashlib.sha256(snapshot.read_bytes()).hexdigest()
+        snapshot.with_suffix(".manifest.json").write_text(
+            json.dumps(
+                {"source": source, "snapshot": str(snapshot), "rows": row_count, "sha256": digest}
+            ),
+            encoding="utf-8",
+        )
+        legacy_paths.append(snapshot)
+    chunk = folder / "ticks_chunk_120000_hash.csv"
+    chunk.write_text(HEADER + _row("2026.08.07 10:00:01", "s", 4), encoding="utf-8")
+    chunk.with_suffix(".manifest.json").write_text(
+        json.dumps(
+            {
+                "format": "incremental_chunk_v1",
+                "source": source,
+                "snapshot": str(chunk),
+                "rows": 1,
+                "sha256": hashlib.sha256(chunk.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    dry_run = prune_legacy_snapshots(archive)
+    assert dry_run.redundant_snapshots == 2
+    assert all(path.exists() for path in legacy_paths)
+    applied = prune_legacy_snapshots(archive, apply=True)
+    assert applied.deleted_files == 4
+    assert legacy_paths[-1].exists()
+    assert chunk.exists()

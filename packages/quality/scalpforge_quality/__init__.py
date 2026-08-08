@@ -2,6 +2,12 @@
 
 from .dataset import build_parquet_dataset
 from .news_report import build_news_quality_report
+from .prune import prune_legacy_snapshots
 from .tick_report import build_tick_quality_report
 
-__all__ = ["build_news_quality_report", "build_parquet_dataset", "build_tick_quality_report"]
+__all__ = [
+    "build_news_quality_report",
+    "build_parquet_dataset",
+    "build_tick_quality_report",
+    "prune_legacy_snapshots",
+]

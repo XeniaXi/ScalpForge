@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .dataset import build_parquet_dataset
 from .news_report import build_news_quality_report, write_news_quality_report
+from .prune import prune_legacy_snapshots
 from .tick_report import build_tick_quality_report, write_tick_quality_report
 
 
@@ -23,15 +24,20 @@ def main() -> None:
     news.add_argument("--events", type=Path, default=Path("data/normalized/news/events.jsonl"))
     news.add_argument("--raw", type=Path, default=Path("data/raw/news"))
     news.add_argument("--output", type=Path, default=Path("data/reports/news-quality.latest.json"))
+    prune = sub.add_parser("prune-legacy")
+    prune.add_argument("--archive", type=Path, default=Path("data/raw/avatrade/GOLD"))
+    prune.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     if args.command == "ticks":
         result = build_tick_quality_report(args.archive)
         write_tick_quality_report(result, args.output)
     elif args.command == "dataset":
         result = build_parquet_dataset(args.archive, args.output_root)
-    else:
+    elif args.command == "news":
         result = build_news_quality_report(args.events, args.raw)
         write_news_quality_report(result, args.output)
+    else:
+        result = prune_legacy_snapshots(args.archive, apply=args.apply)
     print(json.dumps(asdict(result)))
 
 
