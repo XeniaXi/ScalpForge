@@ -8,5 +8,6 @@ __pycache__/
 dist/
 build/
 work/
+tmp/
 data/*
 !data/.gitkeep/

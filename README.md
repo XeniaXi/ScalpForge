@@ -77,6 +77,9 @@ Phase 1B adds evidence-only [news and world-event attribution](docs/news-attribu
 reporting and FRED/ALFRED macro vintages are archived with hashes, normalized without sentiment-to-
 trade shortcuts, and aligned to broker ticks using explicit reaction windows.
 
+The [Phase 1 quality toolkit](docs/phase1-quality.md) adds market-closure-aware health, automated
+24/48-hour tick and news reports, and content-addressed replay-ready Parquet datasets.
+
 ## Repository layout
 
 ```text

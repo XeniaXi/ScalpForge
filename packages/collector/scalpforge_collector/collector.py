@@ -3,10 +3,11 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import shutil
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+from .schedule import is_gold_market_open
 
 
 @dataclass(frozen=True)
@@ -48,18 +49,51 @@ def collect_once(
         _write_health(archive_root, result)
         return result
 
-    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    content = source.read_bytes()
+    digest = hashlib.sha256(content).hexdigest()
     day = now.strftime("%Y/%m/%d")
     destination_dir = archive_root / day
     destination_dir.mkdir(parents=True, exist_ok=True)
-    destination = destination_dir / f"{source.stem}_{now:%H%M%S}_{digest[:12]}.csv"
-    if not destination.exists():
-        shutil.copy2(source, destination)
-    rows, last, age = _inspect(destination, now)
-    status = "healthy" if age is not None and age <= stale_after_seconds else "stale"
-    result = CollectionResult(status, str(source), str(destination), rows, last, age, digest)
-    manifest = destination.with_suffix(".manifest.json")
-    manifest.write_text(json.dumps(asdict(result), indent=2) + "\n", encoding="utf-8")
+    state_path = archive_root / "collector.state.json"
+    state = _read_state(state_path)
+    source_state = state.get(source.name, {})
+    offset = int(source_state.get("offset", 0))
+    if offset > len(content):
+        offset = 0
+    newline = content.find(b"\n")
+    header = content[: newline + 1] if newline >= 0 else b""
+    complete_end = content.rfind(b"\n") + 1
+    destination: Path | None = None
+    if complete_end > offset and header:
+        chunk = content[:complete_end] if offset == 0 else header + content[offset:complete_end]
+        chunk_hash = hashlib.sha256(chunk).hexdigest()
+        destination = destination_dir / f"{source.stem}_chunk_{now:%H%M%S}_{chunk_hash[:12]}.csv"
+        if not destination.exists():
+            destination.write_bytes(chunk)
+        chunk_rows, _, _ = _inspect(destination, now)
+        manifest_data = {
+            "format": "incremental_chunk_v1",
+            "source": str(source),
+            "snapshot": str(destination),
+            "rows": chunk_rows,
+            "source_offset_start": offset,
+            "source_offset_end": complete_end,
+            "sha256": chunk_hash,
+        }
+        destination.with_suffix(".manifest.json").write_text(
+            json.dumps(manifest_data, indent=2) + "\n", encoding="utf-8"
+        )
+        source_state = {"offset": complete_end, "last_snapshot": str(destination)}
+        state[source.name] = source_state
+        _write_state(state_path, state)
+    rows, last, age = _inspect(source, now)
+    fresh = age is not None and age <= stale_after_seconds
+    if fresh and not is_gold_market_open(now):
+        status = "market_closed_heartbeat_healthy"
+    else:
+        status = "healthy" if fresh else "stale"
+    snapshot = str(destination) if destination else source_state.get("last_snapshot")
+    result = CollectionResult(status, str(source), snapshot, rows, last, age, digest)
     _write_health(archive_root, result)
     return result
 
@@ -69,3 +103,19 @@ def _write_health(archive_root: Path, result: CollectionResult) -> None:
     (archive_root / "health.latest.json").write_text(
         json.dumps(asdict(result), indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _read_state(path: Path) -> dict[str, dict[str, object]]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_state(path: Path, state: dict[str, dict[str, object]]) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(path)
