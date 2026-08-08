@@ -21,7 +21,10 @@ Exit: repository builds, tests pass, live execution is impossible.
 
 Exit: repeatable replay from a versioned dataset; no future information can cross the replay clock.
 
-Implemented so far: provider-neutral tick CSV normalization, quality reports, content-addressed manifests, deterministic event-time replay, and a cost-aware tick execution simulator. Durable raw Parquet storage and live provider connectors remain outstanding.
+Implemented so far: provider-neutral streaming tick CSV normalization, explicit timezone/provider
+provenance, immutable source hashes, daily Zstandard Parquet partitions, quality reports,
+content-addressed manifests, deterministic event-time replay, and a cost-aware tick execution
+simulator. Automated historical downloads and multi-feed reconciliation remain outstanding.
 
 The broker-validation portion now includes a read-only MT4 tick/specification recorder and objective feed-comparison reporting. Demo execution probes remain deliberately separate and disabled.
 

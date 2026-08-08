@@ -1,6 +1,9 @@
 import argparse
+import json
+from dataclasses import asdict
 from pathlib import Path
 
+from scalpforge_data.historical import HistoricalCsvNormalizer
 from scalpforge_data.importer import TickCsvImporter
 
 
@@ -10,7 +13,25 @@ def main() -> int:
     parser.add_argument("--source", required=True)
     parser.add_argument("--instrument", default="XAUUSD")
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--normalize-to", type=Path)
+    parser.add_argument("--venue")
+    parser.add_argument("--source-timezone")
+    parser.add_argument("--price-scale", type=float, default=1.0)
     args = parser.parse_args()
+    if args.normalize_to:
+        if not args.venue or not args.source_timezone:
+            parser.error("--venue and --source-timezone are required with --normalize-to")
+        normalized = HistoricalCsvNormalizer().normalize(
+            args.csv,
+            args.normalize_to,
+            provider=args.source,
+            venue=args.venue,
+            instrument=args.instrument,
+            source_timezone=args.source_timezone,
+            price_scale=args.price_scale,
+        )
+        print(json.dumps(asdict(normalized.manifest)))
+        return 0
     importer = TickCsvImporter()
     result = importer.load(args.csv, source=args.source, instrument=args.instrument)
     if args.manifest:
