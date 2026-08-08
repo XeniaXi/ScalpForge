@@ -42,3 +42,18 @@ row counts, timestamps, prices, and spreads reconcile.
 - Writes `.partial` before atomically publishing CSV.
 - Advances checkpoint only after CSV and manifest creation.
 - Marks every export `read_only` and `external_non_executable`.
+
+## Batch ingestion
+
+After a bounded export completes, validate, archive, and consolidate every batch:
+
+```powershell
+.\.venv\Scripts\scalpforge-ingest-jforex.exe `
+  --source-dir "C:\Users\Administrator\JForex4\Strategies\files\ScalpForgeHistorical" `
+  --archive-root "C:\ScalpForge\data\raw\historical\dukascopy\jforex" `
+  --output-root "C:\ScalpForge\data\curated\external"
+```
+
+The command verifies manifest contracts, checksums, row counts, quote ordering and batch overlap
+before writing. Empty batches are archived as session evidence. JForex volume values are retained as
+`jforex_native_unknown` and must not be used as features until their units are reconciled.

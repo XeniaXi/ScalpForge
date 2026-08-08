@@ -8,16 +8,25 @@ strategy:
 research:
   virtual_strategy_initial_equity: 50.0
   strategy_families:
-    - momentum
-    - mean_reversion
-    - breakout
+    - short_horizon_momentum
+    - range_mean_reversion
+    - compression_breakout
     - volatility_expansion
     - liquidity_reversal
     - trend_continuation
     - news_reaction
     - post_news_reversal
-    - microstructure
+    - microstructure_pressure
+    - validation_risk_veto
   arbitrary_daily_trade_cap: null
+  promotion_gate:
+    minimum_net_expectancy_r: 0.0
+    minimum_positive_expectancy_probability: 0.95
+    minimum_out_of_sample_trades: 200
+    minimum_walk_forward_folds: 4
+    minimum_profitable_fold_fraction: 0.75
+    maximum_drawdown_pct: 5.0
+    minimum_cost_stress_multiple: 2.0
 risk:
   max_risk_per_trade_pct: 0.25
   max_daily_loss_pct: 1.0

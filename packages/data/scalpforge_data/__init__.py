@@ -7,6 +7,7 @@ from scalpforge_data.historical import (
     HistoricalImportResult,
 )
 from scalpforge_data.importer import ImportResult, TickCsvImporter
+from scalpforge_data.jforex_batch import JForexBatchIngestManifest, ingest_jforex_batches
 from scalpforge_data.quality import QualityIssue, TickQualityValidator
 
 __all__ = [
@@ -19,4 +20,6 @@ __all__ = [
     "TickQualityValidator",
     "DukascopyMergeManifest",
     "merge_side_exports",
+    "JForexBatchIngestManifest",
+    "ingest_jforex_batches",
 ]
