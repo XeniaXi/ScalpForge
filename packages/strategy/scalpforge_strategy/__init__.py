@@ -19,6 +19,7 @@ from scalpforge_strategy.research_dataset import (
     WalkForwardFold,
     anchored_walk_forward_folds,
 )
+from scalpforge_strategy.sequence_lab import SequenceLabConfig, SequenceLabReport
 from scalpforge_strategy.structural import StructuralConfig, StructuralManifest
 from scalpforge_strategy.structural_lab import StructuralLabConfig, StructuralLabReport
 
@@ -31,6 +32,8 @@ __all__ = [
     "PromotionDecision",
     "PromotionEvidence",
     "ResearchCouncil",
+    "SequenceLabConfig",
+    "SequenceLabReport",
     "StrategyPortfolioLab",
     "StructuralConfig",
     "StructuralLabConfig",
