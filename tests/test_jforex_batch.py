@@ -62,3 +62,19 @@ def test_refuses_checksum_mismatch_before_creating_dataset(tmp_path: Path) -> No
     with pytest.raises(ValueError, match="checksum mismatch"):
         ingest_jforex_batches(source, tmp_path / "archive", tmp_path / "curated")
     assert not (tmp_path / "curated").exists()
+
+
+def test_reference_source_avoids_duplicate_raw_archive(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _batch(source, 0, [("2026-08-03T00:00:00.058Z", 4000.0, 4000.5)])
+    archive = tmp_path / "archive"
+    result = ingest_jforex_batches(
+        source,
+        archive,
+        tmp_path / "curated",
+        copy_to_archive=False,
+    )
+    assert not archive.exists()
+    assert len(result.archived_manifests) == 1
+    assert Path(result.archived_manifests[0]).parent == source.resolve()

@@ -48,6 +48,8 @@ def ingest_jforex_batches(
     source_dir: Path,
     archive_root: Path,
     output_root: Path,
+    *,
+    copy_to_archive: bool = True,
 ) -> JForexBatchIngestManifest:
     batches = _validated_batches(source_dir)
     source_hashes = [batch.sha256 for batch in batches]
@@ -64,7 +66,11 @@ def ingest_jforex_batches(
         sort_keys=True,
     ).encode()
     dataset_id = "xauusd-jforex-" + hashlib.sha256(identity).hexdigest()[:16]
-    archived_manifests = _archive(batches, archive_root)
+    archived_manifests = (
+        _archive(batches, archive_root)
+        if copy_to_archive
+        else [str(batch.manifest_path.resolve()) for batch in batches]
+    )
     dataset_root = output_root / dataset_id
     manifest_path = dataset_root / "manifest.json"
     if manifest_path.is_file():

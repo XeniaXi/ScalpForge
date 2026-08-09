@@ -11,8 +11,18 @@ def main() -> int:
     parser.add_argument("--source-dir", type=Path, required=True)
     parser.add_argument("--archive-root", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument(
+        "--reference-source",
+        action="store_true",
+        help="Keep validated raw batches in source-dir instead of duplicating them",
+    )
     args = parser.parse_args()
-    result = ingest_jforex_batches(args.source_dir, args.archive_root, args.output_root)
+    result = ingest_jforex_batches(
+        args.source_dir,
+        args.archive_root,
+        args.output_root,
+        copy_to_archive=not args.reference_source,
+    )
     print(json.dumps(asdict(result)))
     return 0
 

@@ -57,3 +57,8 @@ After a bounded export completes, validate, archive, and consolidate every batch
 The command verifies manifest contracts, checksums, row counts, quote ordering and batch overlap
 before writing. Empty batches are archived as session evidence. JForex volume values are retained as
 `jforex_native_unknown` and must not be used as features until their units are reconciled.
+
+When disk space cannot hold both the JForex export and a second raw archive copy, use the validated
+source directory as the raw archive in place by adding `--reference-source`. This mode still checks
+every manifest, checksum, row count, interval, and quote. It does not copy or delete source files;
+the resulting manifest references their existing paths, which must remain intact until backed up.
