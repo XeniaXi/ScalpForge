@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+from scalpforge_strategy.execution_clock import CausalQuoteSeries
 from scalpforge_strategy.sequence_lab import SequenceLabConfig, _at, _exit
 
 
@@ -15,6 +16,7 @@ def test_long_exit_crosses_spread_and_slippage() -> None:
     bids = [100.0, 100.0, 101.0]
     asks = [100.5, 100.5, 101.5]
     mids = [100.25, 100.25, 101.25]
+    quotes = CausalQuoteSeries(timestamps, timestamps, timestamps, bids, asks, [0, 0, 0])
     trade = _exit(
         "hold_5s",
         "time_60s",
@@ -24,9 +26,9 @@ def test_long_exit_crosses_spread_and_slippage() -> None:
         1,
         99.0,
         timestamps,
-        bids,
-        asks,
         mids,
+        quotes,
+        [1, 2, None],
         SequenceLabConfig(maximum_gap_seconds=60),
     )
     assert trade is not None

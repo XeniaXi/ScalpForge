@@ -50,9 +50,14 @@ class CausalQuoteSeries:
         open_ask = [float(value) for value in table["bar_open_ask"].to_pylist()]
         if any(right <= left for left, right in zip(occurred_at, occurred_at[1:], strict=False)):
             raise ValueError("feature timestamps must be strictly increasing")
+        if any(right <= left for left, right in zip(quote_at, quote_at[1:], strict=False)):
+            raise ValueError("quote timestamps must be strictly increasing")
         availability_pairs = zip(occurred_at, available_at, strict=True)
         if any(available <= occurred for occurred, available in availability_pairs):
             raise ValueError("features must become available after their observation timestamp")
+        quote_windows = zip(occurred_at, quote_at, available_at, strict=True)
+        if any(not occurred <= quote < available for occurred, quote, available in quote_windows):
+            raise ValueError("opening quote must occur inside its feature observation window")
         segments = [0] * len(occurred_at)
         for index in range(1, len(occurred_at)):
             gap = (occurred_at[index] - occurred_at[index - 1]).total_seconds()

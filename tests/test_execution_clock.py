@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa  # type: ignore[import-untyped]
+import pytest
 from scalpforge_strategy.execution_clock import CausalExecutionConfig, CausalQuoteSeries
 
 
@@ -47,3 +48,18 @@ def test_future_rows_cannot_change_existing_entry_decision() -> None:
     before = CausalQuoteSeries.from_feature_table(_table([0, 1, 2])).entry_indices(config)
     after = CausalQuoteSeries.from_feature_table(_table([0, 1, 2, 3])).entry_indices(config)
     assert before[:2] == after[:2]
+
+
+def test_quote_must_precede_feature_availability() -> None:
+    table = _table([0, 1])
+    late_quotes = pa.array(
+        [
+            datetime(2026, 7, 1, 0, 0, 1, 100_000, tzinfo=UTC),
+            datetime(2026, 7, 1, 0, 0, 1, 200_000, tzinfo=UTC),
+        ]
+    )
+    table = table.set_column(
+        table.schema.get_field_index("bar_open_at"), "bar_open_at", late_quotes
+    )
+    with pytest.raises(ValueError, match="observation window"):
+        CausalQuoteSeries.from_feature_table(table)

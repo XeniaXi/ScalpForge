@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import bisect
 import hashlib
 import json
 import math
@@ -12,6 +11,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from scalpforge_strategy.episodes import episode_start_mask
+from scalpforge_strategy.execution_clock import CausalExecutionConfig, CausalQuoteSeries
 from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 from scalpforge_strategy.structural_lab import stationary_block_interval
@@ -19,7 +19,7 @@ from scalpforge_strategy.structural_lab import stationary_block_interval
 
 @dataclass(frozen=True)
 class FeasibilityConfig:
-    analysis_revision: int = 2
+    analysis_revision: int = 3
     level_windows_seconds: tuple[int, ...] = (60, 300, 900, 3600)
     horizons_seconds: tuple[int, ...] = (5, 15, 30, 60, 300)
     slippage_bps_per_side: tuple[float, ...] = (0.0, 0.25, 0.5, 1.0)
@@ -27,6 +27,8 @@ class FeasibilityConfig:
     minimum_breakout_bps: float = 0.25
     maximum_spread_bps: float = 8.0
     maximum_gap_seconds: int = 5
+    decision_latency_ms: int = 50
+    maximum_entry_delay_seconds: int = 2
     event_interval_seconds: int = 60
     final_holdout_days: int = 4
     bootstrap_samples: int = 1000
@@ -34,8 +36,8 @@ class FeasibilityConfig:
     walk_forward: WalkForwardConfig = WalkForwardConfig(10, 3, 3, 3, 300, 300)
 
     def __post_init__(self) -> None:
-        if self.analysis_revision < 2:
-            raise ValueError("feasibility revision must include episode clustering")
+        if self.analysis_revision < 3:
+            raise ValueError("feasibility revision must include causal execution")
         if min(self.level_windows_seconds) <= 1 or min(self.horizons_seconds) <= 0:
             raise ValueError("windows and horizons must be positive")
         if min(self.slippage_bps_per_side) < 0 or min(self.clearance_thresholds_bps) <= 0:
@@ -173,8 +175,25 @@ def _register(output_root: Path, report: FeasibilityReport) -> None:
 
 
 def _observe(features, structure, timestamps, folds, cfg):
-    bids = [float(value) for value in features["bid"].to_pylist()]
-    asks = [float(value) for value in features["ask"].to_pylist()]
+    quotes = CausalQuoteSeries.from_feature_table(features, cfg.maximum_gap_seconds)
+    clock = CausalExecutionConfig(
+        decision_latency_ms=cfg.decision_latency_ms,
+        maximum_quote_delay_seconds=cfg.maximum_entry_delay_seconds,
+        maximum_continuity_gap_seconds=cfg.maximum_gap_seconds,
+    )
+    entries = quotes.entry_indices(clock)
+    exits = {
+        horizon: quotes.exit_indices(
+            entries,
+            horizon,
+            CausalExecutionConfig(
+                decision_latency_ms=cfg.decision_latency_ms,
+                maximum_quote_delay_seconds=cfg.maximum_gap_seconds,
+                maximum_continuity_gap_seconds=cfg.maximum_gap_seconds,
+            ),
+        )
+        for horizon in cfg.horizons_seconds
+    }
     mids = [float(value) for value in features["mid"].to_pylist()]
     spreads = [float(value) for value in features["spread_bps"].to_pylist()]
     levels = {
@@ -207,30 +226,32 @@ def _observe(features, structure, timestamps, folds, cfg):
             side = _breakout_side(mids[index], high, low, cfg.minimum_breakout_bps)
             if side == 0 or not episode_starts[window][index]:
                 continue
-            endpoints = {
-                horizon: _at(timestamps, index, horizon, cfg.maximum_gap_seconds)
-                for horizon in cfg.horizons_seconds
-            }
+            entry = entries[index]
+            if entry is None:
+                continue
+            endpoints = {horizon: exits[horizon][index] for horizon in cfg.horizons_seconds}
             if any(
-                endpoint is None or timestamps[endpoint] >= fold.test_end_exclusive
+                endpoint is None or quotes.quote_at[endpoint] >= fold.test_end_exclusive
                 for endpoint in endpoints.values()
             ):
                 continue
             for horizon, endpoint in endpoints.items():
                 assert endpoint is not None
-                continuation_gross = (mids[endpoint] / mids[index] - 1) * 10_000 * side
+                entry_mid = (quotes.open_bid[entry] + quotes.open_ask[entry]) / 2
+                exit_mid = (quotes.open_bid[endpoint] + quotes.open_ask[endpoint]) / 2
+                continuation_gross = (exit_mid / entry_mid - 1) * 10_000 * side
                 continuation_net = {
-                    slip: _net(index, endpoint, side, bids, asks, slip)
+                    slip: _net(entry, endpoint, side, quotes.open_bid, quotes.open_ask, slip)
                     for slip in cfg.slippage_bps_per_side
                 }
                 reversal_net = {
-                    slip: _net(index, endpoint, -side, bids, asks, slip)
+                    slip: _net(entry, endpoint, -side, quotes.open_bid, quotes.open_ask, slip)
                     for slip in cfg.slippage_bps_per_side
                 }
                 oracle_net = {
                     slip: max(
-                        _net(index, endpoint, 1, bids, asks, slip),
-                        _net(index, endpoint, -1, bids, asks, slip),
+                        _net(entry, endpoint, 1, quotes.open_bid, quotes.open_ask, slip),
+                        _net(entry, endpoint, -1, quotes.open_bid, quotes.open_ask, slip),
                     )
                     for slip in cfg.slippage_bps_per_side
                 }
@@ -246,14 +267,13 @@ def _observe(features, structure, timestamps, folds, cfg):
                         oracle_net,
                     )
                 )
-            _record_clearance(clearance, window, index, side, timestamps, bids, asks, cfg)
+            final = endpoints[max(cfg.horizons_seconds)]
+            assert final is not None
+            _record_clearance(clearance, window, entry, final, side, quotes, cfg)
     return observations, clearance
 
 
-def _record_clearance(clearance, window, entry, side, timestamps, bids, asks, cfg):
-    final = _at(timestamps, entry, max(cfg.horizons_seconds), cfg.maximum_gap_seconds)
-    if final is None:
-        return
+def _record_clearance(clearance, window, entry, final, side, quotes, cfg):
     keys = [
         (model, threshold)
         for model in ("continuation", "reversal")
@@ -261,9 +281,9 @@ def _record_clearance(clearance, window, entry, side, timestamps, bids, asks, cf
     ]
     found = {key: None for key in keys}
     for cursor in range(entry + 1, final + 1):
-        elapsed = (timestamps[cursor] - timestamps[entry]).total_seconds()
+        elapsed = (quotes.quote_at[cursor] - quotes.quote_at[entry]).total_seconds()
         for model, direction in (("continuation", side), ("reversal", -side)):
-            net = _net(entry, cursor, direction, bids, asks, 0.5)
+            net = _net(entry, cursor, direction, quotes.open_bid, quotes.open_ask, 0.5)
             for threshold in cfg.clearance_thresholds_bps:
                 key = (model, threshold)
                 if found[key] is None and net >= threshold:
@@ -359,19 +379,6 @@ def _net(entry, exit_index, side, bids, asks, slippage_bps):
     if side > 0:
         return (bids[exit_index] * (1 - slip) / (asks[entry] * (1 + slip)) - 1) * 10_000
     return (bids[entry] * (1 - slip) / (asks[exit_index] * (1 + slip)) - 1) * 10_000
-
-
-def _at(timestamps, start, seconds, maximum_gap):
-    target = timestamps[start] + timedelta(seconds=seconds)
-    index = bisect.bisect_left(timestamps, target, lo=start + 1)
-    if index >= len(timestamps) or (timestamps[index] - target).total_seconds() > maximum_gap:
-        return None
-    if any(
-        (timestamps[cursor] - timestamps[cursor - 1]).total_seconds() > maximum_gap
-        for cursor in range(start + 1, index + 1)
-    ):
-        return None
-    return index
 
 
 def _fold(timestamp, folds):

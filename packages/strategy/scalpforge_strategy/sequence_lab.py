@@ -12,6 +12,7 @@ import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from scalpforge_strategy.episodes import episode_start_mask
+from scalpforge_strategy.execution_clock import CausalExecutionConfig, CausalQuoteSeries
 from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 from scalpforge_strategy.structural_lab import stationary_block_interval
@@ -19,7 +20,7 @@ from scalpforge_strategy.structural_lab import stationary_block_interval
 
 @dataclass(frozen=True)
 class SequenceLabConfig:
-    analysis_revision: int = 2
+    analysis_revision: int = 3
     breakout_window_seconds: int = 300
     hold_delays_seconds: tuple[int, ...] = (5, 15)
     retest_window_seconds: int = 30
@@ -28,6 +29,8 @@ class SequenceLabConfig:
     retest_tolerance_bps: float = 0.5
     maximum_spread_bps: float = 8.0
     maximum_gap_seconds: int = 5
+    decision_latency_ms: int = 50
+    maximum_entry_delay_seconds: int = 2
     time_exit_seconds: int = 60
     trailing_activation_bps: float = 3.0
     trailing_distance_bps: float = 1.5
@@ -39,8 +42,8 @@ class SequenceLabConfig:
     walk_forward: WalkForwardConfig = WalkForwardConfig(10, 3, 3, 3, 300, 300)
 
     def __post_init__(self) -> None:
-        if self.analysis_revision < 2:
-            raise ValueError("sequence analysis revision must include episode clustering")
+        if self.analysis_revision < 3:
+            raise ValueError("sequence analysis revision must include causal execution")
         if min(self.hold_delays_seconds) <= 0 or self.time_exit_seconds <= 0:
             raise ValueError("delays and exit horizon must be positive")
         if self.maximum_gap_seconds <= 0 or self.maximum_spread_bps <= 0:
@@ -167,8 +170,14 @@ def _register(output_root: Path, report: SequenceLabReport) -> None:
 
 
 def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
-    bids = [float(value) for value in features["bid"].to_pylist()]
-    asks = [float(value) for value in features["ask"].to_pylist()]
+    quotes = CausalQuoteSeries.from_feature_table(features, cfg.maximum_gap_seconds)
+    execution_entries = quotes.entry_indices(
+        CausalExecutionConfig(
+            decision_latency_ms=cfg.decision_latency_ms,
+            maximum_quote_delay_seconds=cfg.maximum_entry_delay_seconds,
+            maximum_continuity_gap_seconds=cfg.maximum_gap_seconds,
+        )
+    )
     mids = [float(value) for value in features["mid"].to_pylist()]
     spreads = [float(value) for value in features["spread_bps"].to_pylist()]
     activity = [float(value) for value in features["tick_intensity_ratio"].to_pylist()]
@@ -212,8 +221,9 @@ def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
             )
             if entry is None:
                 continue
-            entry_index, trade_side = entry
-            if timestamps[entry_index] >= fold.test_end_exclusive:
+            signal_index, trade_side = entry
+            entry_index = execution_entries[signal_index]
+            if entry_index is None or quotes.quote_at[entry_index] >= fold.test_end_exclusive:
                 continue
             for exit_id in ("time_60s", "structural_or_time", "trailing_or_time"):
                 trade = _exit(
@@ -225,9 +235,9 @@ def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
                     trade_side,
                     level,
                     timestamps,
-                    bids,
-                    asks,
                     mids,
+                    quotes,
+                    execution_entries,
                     cfg,
                 )
                 if trade is not None:
@@ -292,44 +302,51 @@ def _exit(
     side,
     level,
     timestamps,
-    bids,
-    asks,
     mids,
+    quotes,
+    execution_entries,
     cfg,
 ):
-    final = _at(timestamps, entry, cfg.time_exit_seconds, cfg.maximum_gap_seconds)
+    final = _at(quotes.quote_at, entry, cfg.time_exit_seconds, cfg.maximum_gap_seconds)
     if final is None:
         return None
-    if timestamps[final] >= test_end_exclusive:
+    if quotes.quote_at[final] >= test_end_exclusive:
         return None
     exit_index = final
     best_bps = -math.inf
     for cursor in range(entry + 1, final + 1):
-        gross = (mids[cursor] / mids[entry] - 1) * 10_000 * side
+        entry_mid = (quotes.open_bid[entry] + quotes.open_ask[entry]) / 2
+        gross = (mids[cursor] / entry_mid - 1) * 10_000 * side
         best_bps = max(best_bps, gross)
+        exit_signal = False
         if exit_id == "structural_or_time":
             crossed = mids[cursor] < level if side > 0 else mids[cursor] > level
             if crossed:
-                exit_index = cursor
-                break
+                exit_signal = True
         if (
             exit_id == "trailing_or_time"
             and best_bps >= cfg.trailing_activation_bps
             and gross <= best_bps - cfg.trailing_distance_bps
         ):
-            exit_index = cursor
-            break
+            exit_signal = True
+        if exit_signal:
+            executable = execution_entries[cursor]
+            if executable is not None and executable <= final:
+                exit_index = executable
+                break
     slip = cfg.slippage_bps_per_side / 10_000
-    gross = (mids[exit_index] / mids[entry] - 1) * 10_000 * side
+    entry_mid = (quotes.open_bid[entry] + quotes.open_ask[entry]) / 2
+    exit_mid = (quotes.open_bid[exit_index] + quotes.open_ask[exit_index]) / 2
+    gross = (exit_mid / entry_mid - 1) * 10_000 * side
     if side > 0:
-        entry_price = asks[entry] * (1 + slip)
-        exit_price = bids[exit_index] * (1 - slip)
+        entry_price = quotes.open_ask[entry] * (1 + slip)
+        exit_price = quotes.open_bid[exit_index] * (1 - slip)
         net = (exit_price / entry_price - 1) * 10_000
     else:
-        entry_price = bids[entry] * (1 - slip)
-        exit_price = asks[exit_index] * (1 + slip)
+        entry_price = quotes.open_bid[entry] * (1 - slip)
+        exit_price = quotes.open_ask[exit_index] * (1 + slip)
         net = (entry_price / exit_price - 1) * 10_000
-    holding = (timestamps[exit_index] - timestamps[entry]).total_seconds()
+    holding = (quotes.quote_at[exit_index] - quotes.quote_at[entry]).total_seconds()
     return _Trade(policy, exit_id, fold, gross, net, holding)
 
 
