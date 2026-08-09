@@ -11,12 +11,15 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from scalpforge_strategy.episodes import episode_start_mask
+from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 from scalpforge_strategy.structural_lab import stationary_block_interval
 
 
 @dataclass(frozen=True)
 class FeasibilityConfig:
+    analysis_revision: int = 2
     level_windows_seconds: tuple[int, ...] = (60, 300, 900, 3600)
     horizons_seconds: tuple[int, ...] = (5, 15, 30, 60, 300)
     slippage_bps_per_side: tuple[float, ...] = (0.0, 0.25, 0.5, 1.0)
@@ -31,6 +34,8 @@ class FeasibilityConfig:
     walk_forward: WalkForwardConfig = WalkForwardConfig(10, 3, 3, 3, 300, 300)
 
     def __post_init__(self) -> None:
+        if self.analysis_revision < 2:
+            raise ValueError("feasibility revision must include episode clustering")
         if min(self.level_windows_seconds) <= 1 or min(self.horizons_seconds) <= 0:
             raise ValueError("windows and horizons must be positive")
         if min(self.slippage_bps_per_side) < 0 or min(self.clearance_thresholds_bps) <= 0:
@@ -134,7 +139,9 @@ def run_feasibility_map(
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["metrics"] = [FeasibilityMetrics(**item) for item in payload["metrics"]]
         payload["clearance"] = [ClearanceMetrics(**item) for item in payload["clearance"]]
-        return FeasibilityReport(**payload)
+        report = FeasibilityReport(**payload)
+        _register(output_root, report)
+        return report
     report = FeasibilityReport(
         report_id,
         1,
@@ -150,7 +157,19 @@ def run_feasibility_map(
     )
     root.mkdir(parents=True)
     path.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
+    _register(output_root, report)
     return report
+
+
+def _register(output_root: Path, report: FeasibilityReport) -> None:
+    register_experiment(
+        output_root / "experiment-registry.jsonl",
+        report_id=report.report_id,
+        experiment_family="feasibility-map",
+        dataset_ids=(report.feature_dataset_id, report.structural_dataset_id),
+        hypothesis_count=max(len(report.metrics) + len(report.clearance), 1),
+        holdout_evaluated=report.holdout_evaluated,
+    )
 
 
 def _observe(features, structure, timestamps, folds, cfg):
@@ -167,7 +186,17 @@ def _observe(features, structure, timestamps, folds, cfg):
     }
     observations: list[_Observation] = []
     clearance: dict[tuple[str, int, float], list[float | None]] = {}
-    last: dict[int, datetime | None] = {window: None for window in cfg.level_windows_seconds}
+    episode_starts = {
+        window: episode_start_mask(
+            timestamps,
+            [
+                (_breakout_side(mid, high, low, cfg.minimum_breakout_bps) or None)
+                for mid, high, low in zip(mids, levels[window][0], levels[window][1], strict=True)
+            ],
+            cfg.event_interval_seconds,
+        )
+        for window in cfg.level_windows_seconds
+    }
     for index, timestamp in enumerate(timestamps):
         fold = _fold(timestamp, folds)
         if fold is None or spreads[index] > cfg.maximum_spread_bps:
@@ -176,10 +205,7 @@ def _observe(features, structure, timestamps, folds, cfg):
             high = levels[window][0][index]
             low = levels[window][1][index]
             side = _breakout_side(mids[index], high, low, cfg.minimum_breakout_bps)
-            if side == 0:
-                continue
-            previous = last[window]
-            if previous and (timestamp - previous).total_seconds() < cfg.event_interval_seconds:
+            if side == 0 or not episode_starts[window][index]:
                 continue
             endpoints = {
                 horizon: _at(timestamps, index, horizon, cfg.maximum_gap_seconds)
@@ -221,7 +247,6 @@ def _observe(features, structure, timestamps, folds, cfg):
                     )
                 )
             _record_clearance(clearance, window, index, side, timestamps, bids, asks, cfg)
-            last[window] = timestamp
     return observations, clearance
 
 

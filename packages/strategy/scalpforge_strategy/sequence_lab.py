@@ -11,12 +11,15 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from scalpforge_strategy.episodes import episode_start_mask
+from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 from scalpforge_strategy.structural_lab import stationary_block_interval
 
 
 @dataclass(frozen=True)
 class SequenceLabConfig:
+    analysis_revision: int = 2
     breakout_window_seconds: int = 300
     hold_delays_seconds: tuple[int, ...] = (5, 15)
     retest_window_seconds: int = 30
@@ -36,6 +39,8 @@ class SequenceLabConfig:
     walk_forward: WalkForwardConfig = WalkForwardConfig(10, 3, 3, 3, 300, 300)
 
     def __post_init__(self) -> None:
+        if self.analysis_revision < 2:
+            raise ValueError("sequence analysis revision must include episode clustering")
         if min(self.hold_delays_seconds) <= 0 or self.time_exit_seconds <= 0:
             raise ValueError("delays and exit horizon must be positive")
         if self.maximum_gap_seconds <= 0 or self.maximum_spread_bps <= 0:
@@ -128,7 +133,9 @@ def run_sequence_lab(
     if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["metrics"] = [PolicyMetrics(**item) for item in payload["metrics"]]
-        return SequenceLabReport(**payload)
+        report = SequenceLabReport(**payload)
+        _register(output_root, report)
+        return report
     report = SequenceLabReport(
         report_id=report_id,
         schema_version=1,
@@ -144,7 +151,19 @@ def run_sequence_lab(
     )
     root.mkdir(parents=True)
     path.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
+    _register(output_root, report)
     return report
+
+
+def _register(output_root: Path, report: SequenceLabReport) -> None:
+    register_experiment(
+        output_root / "experiment-registry.jsonl",
+        report_id=report.report_id,
+        experiment_family="sequence-lab",
+        dataset_ids=(report.feature_dataset_id, report.structural_dataset_id),
+        hypothesis_count=max(len(report.metrics), 1),
+        holdout_evaluated=report.holdout_evaluated,
+    )
 
 
 def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
@@ -161,17 +180,23 @@ def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
         (f"hold_{delay}s", delay) for delay in cfg.hold_delays_seconds
     ] + [("retest_resume", None), ("sweep_fade", None), ("compression_activity_hold", 5)]
     trades: list[_Trade] = []
-    last_entry: dict[str, datetime | None] = {name: None for name, _ in candidates}
+    episode_starts = episode_start_mask(
+        timestamps,
+        [int(side) if side else None for side in sides],
+        cfg.decision_interval_seconds,
+    )
     for index, timestamp in enumerate(timestamps):
         fold = _fold(timestamp, folds)
         side = int(sides[index])
-        if fold is None or side == 0 or spreads[index] > cfg.maximum_spread_bps:
+        if (
+            not episode_starts[index]
+            or fold is None
+            or side == 0
+            or spreads[index] > cfg.maximum_spread_bps
+        ):
             continue
         level = float(highs[index] if side > 0 else lows[index])
         for policy, delay in candidates:
-            previous = last_entry[policy]
-            if previous and (timestamp - previous).total_seconds() < cfg.decision_interval_seconds:
-                continue
             entry = _entry(
                 policy,
                 index,
@@ -207,7 +232,6 @@ def _simulate(features, structure, timestamps, folds, cfg) -> list[_Trade]:
                 )
                 if trade is not None:
                     trades.append(trade)
-            last_entry[policy] = timestamps[entry_index]
     return trades
 
 

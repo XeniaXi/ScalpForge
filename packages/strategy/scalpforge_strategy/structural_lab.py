@@ -11,11 +11,14 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from scalpforge_strategy.episodes import episode_start_mask
+from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 
 
 @dataclass(frozen=True)
 class StructuralLabConfig:
+    analysis_revision: int = 2
     horizon_seconds: int = 60
     decision_interval_seconds: int = 60
     breakout_window_seconds: int = 300
@@ -26,6 +29,8 @@ class StructuralLabConfig:
     walk_forward: WalkForwardConfig = WalkForwardConfig(10, 3, 3, 3, 300, 300)
 
     def __post_init__(self) -> None:
+        if self.analysis_revision < 2:
+            raise ValueError("structural analysis revision must include episode clustering")
         if self.horizon_seconds <= 0 or self.decision_interval_seconds < self.horizon_seconds:
             raise ValueError("decisions must be positive and cannot overlap outcome horizons")
         if self.maximum_spread_bps <= 0 or self.final_holdout_days <= 0:
@@ -130,7 +135,9 @@ def run_structural_lab(
     if path.exists():
         payload = json.loads(path.read_text(encoding="utf-8"))
         payload["metrics"] = [SliceMetrics(**item) for item in payload["metrics"]]
-        return StructuralLabReport(**payload)
+        report = StructuralLabReport(**payload)
+        _register(output_root, report)
+        return report
     report = StructuralLabReport(
         report_id=report_id,
         schema_version=1,
@@ -147,7 +154,23 @@ def run_structural_lab(
     )
     root.mkdir(parents=True)
     path.write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
+    _register(output_root, report)
     return report
+
+
+def _register(output_root: Path, report: StructuralLabReport) -> None:
+    register_experiment(
+        output_root / "experiment-registry.jsonl",
+        report_id=report.report_id,
+        experiment_family="structural-lab",
+        dataset_ids=(
+            report.feature_dataset_id,
+            report.structural_dataset_id,
+            report.outcome_dataset_id,
+        ),
+        hypothesis_count=max(len(report.metrics), 1),
+        holdout_evaluated=report.holdout_evaluated,
+    )
 
 
 def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Event]:
@@ -167,13 +190,15 @@ def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Even
     short_mae = outcomes[f"h{cfg.horizon_seconds}_short_mae_bps"].to_pylist()
     timestamp_index = {value: index for index, value in enumerate(timestamps)}
     selected: list[_Event] = []
-    last: datetime | None = None
+    episode_starts = episode_start_mask(
+        timestamps,
+        [int(side) if side else None for side in sides],
+        cfg.decision_interval_seconds,
+    )
     for index, timestamp in enumerate(timestamps):
-        if not _in_tests(timestamp, folds) or not valid[index] or not sides[index]:
+        if not episode_starts[index] or not _in_tests(timestamp, folds) or not valid[index]:
             continue
         if spreads[index] > cfg.maximum_spread_bps:
-            continue
-        if last and (timestamp - last).total_seconds() < cfg.decision_interval_seconds:
             continue
         endpoint_time = timestamp + timedelta(seconds=cfg.horizon_seconds + delays[index])
         endpoint = timestamp_index.get(endpoint_time)
@@ -207,7 +232,6 @@ def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Even
                 classification,
             )
         )
-        last = timestamp
     return selected
 
 
