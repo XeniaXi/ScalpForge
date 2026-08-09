@@ -6,6 +6,7 @@ from scalpforge_strategy.council import (
     ResearchCouncil,
     default_advisor_mandates,
 )
+from scalpforge_strategy.feasibility import FeasibilityConfig, FeasibilityReport
 from scalpforge_strategy.outcomes import OutcomeConfig, OutcomeDatasetManifest
 from scalpforge_strategy.portfolio import (
     StrategyPortfolioLab,
@@ -26,6 +27,8 @@ from scalpforge_strategy.structural_lab import StructuralLabConfig, StructuralLa
 __all__ = [
     "AdvisorMandate",
     "FeatureConfig",
+    "FeasibilityConfig",
+    "FeasibilityReport",
     "OutcomeConfig",
     "OutcomeDatasetManifest",
     "PointInTimeFeatureBuilder",
