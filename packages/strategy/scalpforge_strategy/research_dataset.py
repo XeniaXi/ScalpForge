@@ -15,12 +15,15 @@ from scalpforge_core.models import MarketTick
 
 @dataclass(frozen=True)
 class FeatureConfig:
+    schema_revision: int = 2
     bar_seconds: int = 1
     maximum_carry_seconds: int = 5
     return_horizons_seconds: tuple[int, ...] = (1, 5, 30, 60)
     volatility_window_seconds: int = 60
 
     def __post_init__(self) -> None:
+        if self.schema_revision != 2:
+            raise ValueError("only causal feature schema revision 2 is supported")
         if self.bar_seconds != 1:
             raise ValueError("only one-second research bars are currently supported")
         if self.maximum_carry_seconds < 0:
@@ -84,6 +87,8 @@ class _SecondBar:
     occurred_at: datetime
     bid: float
     ask: float
+    first_bid: float
+    first_ask: float
     first_mid: float
     mid: float
     tick_count: int
@@ -155,6 +160,9 @@ class PointInTimeFeatureBuilder:
         prior_tick_rate = sum(item.tick_count for item in recent) / max(len(recent), 1)
         return {
             "occurred_at": bar.occurred_at,
+            "feature_available_at": bar.occurred_at + timedelta(seconds=1),
+            "bar_open_bid": bar.first_bid,
+            "bar_open_ask": bar.first_ask,
             "bid": bar.bid,
             "ask": bar.ask,
             "mid": mid,
@@ -288,7 +296,18 @@ def _second_bars(ticks: Iterable[MarketTick]) -> Iterator[_SecondBar]:
         if active is None or second != active.occurred_at:
             if active is not None:
                 yield active
-            active = _SecondBar(second, tick.bid, tick.ask, mid, mid, 1, 0, timestamp)
+            active = _SecondBar(
+                second,
+                tick.bid,
+                tick.ask,
+                tick.bid,
+                tick.ask,
+                mid,
+                mid,
+                1,
+                0,
+                timestamp,
+            )
         else:
             changed = tick.bid != active.bid or tick.ask != active.ask
             active.bid = tick.bid

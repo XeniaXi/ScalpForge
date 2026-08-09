@@ -30,6 +30,9 @@ def test_features_are_point_in_time_and_aggregate_each_second() -> None:
     assert len(rows) == 3
     assert rows[0]["tick_count"] == 2
     assert rows[0]["mid"] == 101.25
+    assert rows[0]["bar_open_bid"] == 100
+    assert rows[0]["bar_open_ask"] == 100.5
+    assert rows[0]["feature_available_at"] == datetime(2026, 7, 1, 0, 0, 1, tzinfo=UTC)
     assert rows[1]["return_1s"] == 102.25 / 101.25 - 1
     assert rows[1]["return_5s"] is None
     assert rows[2]["is_gap_start"] is False
