@@ -89,6 +89,7 @@ class _SecondBar:
     ask: float
     first_bid: float
     first_ask: float
+    first_tick_at: datetime
     first_mid: float
     mid: float
     tick_count: int
@@ -161,6 +162,7 @@ class PointInTimeFeatureBuilder:
         return {
             "occurred_at": bar.occurred_at,
             "feature_available_at": bar.occurred_at + timedelta(seconds=1),
+            "bar_open_at": bar.first_tick_at,
             "bar_open_bid": bar.first_bid,
             "bar_open_ask": bar.first_ask,
             "bid": bar.bid,
@@ -302,6 +304,7 @@ def _second_bars(ticks: Iterable[MarketTick]) -> Iterator[_SecondBar]:
                 tick.ask,
                 tick.bid,
                 tick.ask,
+                timestamp,
                 mid,
                 mid,
                 1,

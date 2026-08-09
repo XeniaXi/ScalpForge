@@ -24,6 +24,7 @@ class CausalExecutionConfig:
 class CausalQuoteSeries:
     occurred_at: list[datetime]
     feature_available_at: list[datetime]
+    quote_at: list[datetime]
     open_bid: list[float]
     open_ask: list[float]
     segments: list[int]
@@ -35,6 +36,7 @@ class CausalQuoteSeries:
         required = {
             "occurred_at",
             "feature_available_at",
+            "bar_open_at",
             "bar_open_bid",
             "bar_open_ask",
         }
@@ -43,6 +45,7 @@ class CausalQuoteSeries:
             raise ValueError(f"feature table lacks causal execution columns: {sorted(missing)}")
         occurred_at = _utc_timestamps(table["occurred_at"])
         available_at = _utc_timestamps(table["feature_available_at"])
+        quote_at = _utc_timestamps(table["bar_open_at"])
         open_bid = [float(value) for value in table["bar_open_bid"].to_pylist()]
         open_ask = [float(value) for value in table["bar_open_ask"].to_pylist()]
         if any(right <= left for left, right in zip(occurred_at, occurred_at[1:], strict=False)):
@@ -56,19 +59,17 @@ class CausalQuoteSeries:
             segments[index] = segments[index - 1] + int(
                 gap > maximum_continuity_gap_seconds
             )
-        return cls(occurred_at, available_at, open_bid, open_ask, segments)
+        return cls(occurred_at, available_at, quote_at, open_bid, open_ask, segments)
 
     def entry_indices(self, config: CausalExecutionConfig) -> list[int | None]:
         entries: list[int | None] = [None] * len(self.occurred_at)
         latency = timedelta(milliseconds=config.decision_latency_ms)
         for signal_index, available_at in enumerate(self.feature_available_at):
             eligible_at = available_at + latency
-            quote_index = bisect.bisect_left(
-                self.occurred_at, eligible_at, lo=signal_index + 1
-            )
+            quote_index = bisect.bisect_left(self.quote_at, eligible_at, lo=signal_index + 1)
             if quote_index >= len(self.occurred_at):
                 continue
-            delay = (self.occurred_at[quote_index] - eligible_at).total_seconds()
+            delay = (self.quote_at[quote_index] - eligible_at).total_seconds()
             if delay > config.maximum_quote_delay_seconds:
                 continue
             if self.segments[quote_index] != self.segments[signal_index]:
@@ -88,13 +89,11 @@ class CausalQuoteSeries:
         for signal_index, entry_index in enumerate(entries):
             if entry_index is None:
                 continue
-            target = self.occurred_at[entry_index] + timedelta(seconds=horizon_seconds)
-            exit_index = bisect.bisect_left(
-                self.occurred_at, target, lo=entry_index + 1
-            )
+            target = self.quote_at[entry_index] + timedelta(seconds=horizon_seconds)
+            exit_index = bisect.bisect_left(self.quote_at, target, lo=entry_index + 1)
             if exit_index >= len(self.occurred_at):
                 continue
-            delay = (self.occurred_at[exit_index] - target).total_seconds()
+            delay = (self.quote_at[exit_index] - target).total_seconds()
             if delay > config.maximum_quote_delay_seconds:
                 continue
             if self.segments[exit_index] != self.segments[entry_index]:

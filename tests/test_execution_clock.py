@@ -11,6 +11,7 @@ def _table(seconds: list[int]) -> pa.Table:
         {
             "occurred_at": occurred,
             "feature_available_at": [value + timedelta(seconds=1) for value in occurred],
+            "bar_open_at": [value + timedelta(milliseconds=100) for value in occurred],
             "bar_open_bid": [100.0 + index for index in range(len(seconds))],
             "bar_open_ask": [100.5 + index for index in range(len(seconds))],
         }

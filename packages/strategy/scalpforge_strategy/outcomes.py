@@ -12,13 +12,17 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
+from .execution_clock import CausalExecutionConfig, CausalQuoteSeries
+
 
 @dataclass(frozen=True)
 class OutcomeConfig:
     horizons_seconds: tuple[int, ...] = (5, 15, 30, 60, 300)
     slippage_bps_per_side: float = 0.5
+    maximum_entry_delay_seconds: int = 2
     maximum_endpoint_delay_seconds: int = 2
     maximum_continuity_gap_seconds: int = 5
+    decision_latency_ms: int = 50
 
     def __post_init__(self) -> None:
         if not self.horizons_seconds or min(self.horizons_seconds) <= 0:
@@ -27,10 +31,12 @@ class OutcomeConfig:
             raise ValueError("outcome horizons must be unique")
         if self.slippage_bps_per_side < 0:
             raise ValueError("slippage cannot be negative")
-        if self.maximum_endpoint_delay_seconds < 0:
-            raise ValueError("endpoint delay cannot be negative")
+        if self.maximum_entry_delay_seconds < 0 or self.maximum_endpoint_delay_seconds < 0:
+            raise ValueError("entry and endpoint delay cannot be negative")
         if self.maximum_continuity_gap_seconds <= 0:
             raise ValueError("continuity gap must be positive")
+        if self.decision_latency_ms < 0:
+            raise ValueError("decision latency cannot be negative")
 
 
 @dataclass(frozen=True)
@@ -72,7 +78,7 @@ def write_outcome_dataset(
         return OutcomeDatasetManifest(**json.loads(manifest_path.read_text(encoding="utf-8")))
 
     table = _read_feature_table(feature_manifest, source)
-    timestamps, bids, asks, segments = _outcome_inputs(table, outcome_config)
+    quotes = _outcome_inputs(table, outcome_config)
     staging = output_root / f"{dataset_id}.partial"
     staging.mkdir(parents=True, exist_ok=False)
     try:
@@ -82,7 +88,7 @@ def write_outcome_dataset(
         outcome_columns: list[str] = []
         for horizon in outcome_config.horizons_seconds:
             rows, valid = _build_horizon(
-                timestamps, bids, asks, segments, horizon, outcome_config
+                quotes, horizon, outcome_config
             )
             horizon_dir = staging / f"horizon={horizon}"
             horizon_dir.mkdir()
@@ -99,11 +105,11 @@ def write_outcome_dataset(
             del rows, outcome_table
         manifest = OutcomeDatasetManifest(
             dataset_id=dataset_id,
-            schema_version=1,
+            schema_version=2,
             created_at=datetime.now(UTC).isoformat(),
             source_feature_dataset_id=source_id,
             source_feature_manifest=str(feature_manifest.resolve()),
-            row_count=len(timestamps),
+            row_count=len(quotes.occurred_at),
             valid_counts=valid_counts,
             outcome_config=serialized_config,
             outcome_columns=["occurred_at", *outcome_columns],
@@ -124,11 +130,11 @@ def write_outcome_dataset(
 def build_outcome_columns(
     features: pa.Table, config: OutcomeConfig
 ) -> tuple[dict[str, list[object]], dict[str, int]]:
-    timestamps, bids, asks, segments = _outcome_inputs(features, config)
-    result: dict[str, list[object]] = {"occurred_at": timestamps}
+    quotes = _outcome_inputs(features, config)
+    result: dict[str, list[object]] = {"occurred_at": quotes.occurred_at}
     valid_counts: dict[str, int] = {}
     for horizon in config.horizons_seconds:
-        columns, valid = _build_horizon(timestamps, bids, asks, segments, horizon, config)
+        columns, valid = _build_horizon(quotes, horizon, config)
         columns.pop("occurred_at")
         result.update(columns)
         valid_counts[str(horizon)] = valid
@@ -137,32 +143,25 @@ def build_outcome_columns(
 
 def _outcome_inputs(
     features: pa.Table, config: OutcomeConfig
-) -> tuple[list[datetime], list[float], list[float], list[int]]:
-    timestamps = _utc_timestamps(features["occurred_at"])
-    bids = [float(value) for value in features["bid"].to_pylist()]
-    asks = [float(value) for value in features["ask"].to_pylist()]
-    if not timestamps:
+) -> CausalQuoteSeries:
+    if not len(features):
         raise ValueError("feature dataset is empty")
-    segments = [0] * len(timestamps)
-    for index in range(1, len(timestamps)):
-        delta = (timestamps[index] - timestamps[index - 1]).total_seconds()
-        segments[index] = segments[index - 1] + int(delta > config.maximum_continuity_gap_seconds)
-    return timestamps, bids, asks, segments
+    return CausalQuoteSeries.from_feature_table(
+        features, config.maximum_continuity_gap_seconds
+    )
 
 
 def _build_horizon(
-    timestamps: list[datetime],
-    bids: list[float],
-    asks: list[float],
-    segments: list[int],
+    quotes: CausalQuoteSeries,
     horizon: int,
     config: OutcomeConfig,
 ) -> tuple[dict[str, list[object]], int]:
-    count = len(timestamps)
+    count = len(quotes.occurred_at)
     prefix = f"h{horizon}"
     columns: dict[str, list[object]] = {
-            "occurred_at": timestamps,
+            "occurred_at": quotes.occurred_at,
             f"{prefix}_valid": [False] * count,
+            f"{prefix}_entry_delay_seconds": [None] * count,
             f"{prefix}_endpoint_delay_seconds": [None] * count,
             f"{prefix}_long_net_bps": [None] * count,
             f"{prefix}_short_net_bps": [None] * count,
@@ -171,20 +170,41 @@ def _build_horizon(
             f"{prefix}_short_mfe_bps": [None] * count,
             f"{prefix}_short_mae_bps": [None] * count,
     }
-    endpoints = _endpoints(timestamps, segments, horizon, config)
-    future_bid_max, future_bid_min = _forward_extrema(bids, endpoints)
-    future_ask_max, future_ask_min = _forward_extrema(asks, endpoints)
+    entry_config = CausalExecutionConfig(
+        decision_latency_ms=config.decision_latency_ms,
+        maximum_quote_delay_seconds=config.maximum_entry_delay_seconds,
+        maximum_continuity_gap_seconds=config.maximum_continuity_gap_seconds,
+    )
+    exit_config = CausalExecutionConfig(
+        decision_latency_ms=config.decision_latency_ms,
+        maximum_quote_delay_seconds=config.maximum_endpoint_delay_seconds,
+        maximum_continuity_gap_seconds=config.maximum_continuity_gap_seconds,
+    )
+    entries = quotes.entry_indices(entry_config)
+    endpoints = quotes.exit_indices(entries, horizon, exit_config)
+    future_bid_max, future_bid_min = _forward_extrema(
+        quotes.open_bid, entries, endpoints
+    )
+    future_ask_max, future_ask_min = _forward_extrema(
+        quotes.open_ask, entries, endpoints
+    )
     slip = config.slippage_bps_per_side / 10_000
     valid = 0
-    for index, endpoint in enumerate(endpoints):
-        if endpoint is None:
+    latency = timedelta(milliseconds=config.decision_latency_ms)
+    for index, (entry, endpoint) in enumerate(zip(entries, endpoints, strict=True)):
+        if entry is None or endpoint is None:
             continue
-        delay = timestamps[endpoint] - (timestamps[index] + timedelta(seconds=horizon))
-        long_entry = asks[index] * (1 + slip)
-        long_exit = bids[endpoint] * (1 - slip)
-        short_entry = bids[index] * (1 - slip)
-        short_exit = asks[endpoint] * (1 + slip)
+        eligible_at = quotes.feature_available_at[index] + latency
+        entry_delay = quotes.quote_at[entry] - eligible_at
+        delay = quotes.quote_at[endpoint] - (
+            quotes.quote_at[entry] + timedelta(seconds=horizon)
+        )
+        long_entry = quotes.open_ask[entry] * (1 + slip)
+        long_exit = quotes.open_bid[endpoint] * (1 - slip)
+        short_entry = quotes.open_bid[entry] * (1 - slip)
+        short_exit = quotes.open_ask[endpoint] * (1 + slip)
         columns[f"{prefix}_valid"][index] = True
+        columns[f"{prefix}_entry_delay_seconds"][index] = entry_delay.total_seconds()
         columns[f"{prefix}_endpoint_delay_seconds"][index] = delay.total_seconds()
         columns[f"{prefix}_long_net_bps"][index] = (long_exit / long_entry - 1) * 10_000
         columns[f"{prefix}_short_net_bps"][index] = (short_entry / short_exit - 1) * 10_000
@@ -204,41 +224,18 @@ def _build_horizon(
     return columns, valid
 
 
-def _endpoints(
-    timestamps: list[datetime],
-    segments: list[int],
-    horizon: int,
-    config: OutcomeConfig,
-) -> list[int | None]:
-    endpoints: list[int | None] = [None] * len(timestamps)
-    right = 0
-    for left, timestamp in enumerate(timestamps):
-        right = max(right, left + 1)
-        target = timestamp + timedelta(seconds=horizon)
-        while right < len(timestamps) and timestamps[right] < target:
-            right += 1
-        if right >= len(timestamps):
-            break
-        delay = (timestamps[right] - target).total_seconds()
-        if delay <= config.maximum_endpoint_delay_seconds and segments[right] == segments[left]:
-            endpoints[left] = right
-    return endpoints
-
-
 def _forward_extrema(
-    values: list[float], endpoints: list[int | None]
+    values: list[float], entries: list[int | None], endpoints: list[int | None]
 ) -> tuple[list[float], list[float]]:
     maxima = [math.nan] * len(values)
     minima = [math.nan] * len(values)
     maximum_queue: deque[int] = deque()
     minimum_queue: deque[int] = deque()
     added = 0
-    for left, endpoint in enumerate(endpoints):
-        if endpoint is None:
-            maximum_queue.clear()
-            minimum_queue.clear()
-            added = max(added, left + 1)
+    for left, (entry, endpoint) in enumerate(zip(entries, endpoints, strict=True)):
+        if entry is None or endpoint is None:
             continue
+        added = max(added, entry)
         while added <= endpoint:
             while maximum_queue and values[maximum_queue[-1]] <= values[added]:
                 maximum_queue.pop()
@@ -247,9 +244,9 @@ def _forward_extrema(
                 minimum_queue.pop()
             minimum_queue.append(added)
             added += 1
-        while maximum_queue and maximum_queue[0] <= left:
+        while maximum_queue and maximum_queue[0] < entry:
             maximum_queue.popleft()
-        while minimum_queue and minimum_queue[0] <= left:
+        while minimum_queue and minimum_queue[0] < entry:
             minimum_queue.popleft()
         maxima[left] = values[maximum_queue[0]]
         minima[left] = values[minimum_queue[0]]
@@ -263,7 +260,18 @@ def _read_feature_table(feature_manifest: Path, source: dict[str, object]) -> pa
         path = Path(str(stored)).resolve()
         if not path.is_relative_to(root):
             raise ValueError("feature partition escapes manifest directory")
-        tables.append(pq.read_table(path, columns=["occurred_at", "bid", "ask"]))
+        tables.append(
+            pq.read_table(
+                path,
+                columns=[
+                    "occurred_at",
+                    "feature_available_at",
+                    "bar_open_at",
+                    "bar_open_bid",
+                    "bar_open_ask",
+                ],
+            )
+        )
     if not tables:
         raise ValueError("feature manifest has no partitions")
     return pa.concat_tables(tables)

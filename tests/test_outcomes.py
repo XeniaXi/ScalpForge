@@ -12,26 +12,30 @@ from scalpforge_strategy.outcomes import (
 
 def feature_table(seconds: list[int], bids: list[float]) -> pa.Table:
     start = datetime(2026, 7, 1, tzinfo=UTC)
+    occurred = [start + timedelta(seconds=value) for value in seconds]
     return pa.Table.from_pydict(
         {
-            "occurred_at": [start + timedelta(seconds=value) for value in seconds],
-            "bid": bids,
-            "ask": [value + 0.5 for value in bids],
+            "occurred_at": occurred,
+            "feature_available_at": [value + timedelta(seconds=1) for value in occurred],
+            "bar_open_at": [value + timedelta(milliseconds=100) for value in occurred],
+            "bar_open_bid": bids,
+            "bar_open_ask": [value + 0.5 for value in bids],
         }
     )
 
 
 def test_outcomes_use_executable_sides_and_future_path_extrema() -> None:
     columns, counts = build_outcome_columns(
-        feature_table([0, 1, 2, 3], [100, 101, 102, 103]),
+        feature_table([0, 1, 2, 3, 4], [100, 101, 102, 103, 104]),
         OutcomeConfig((2,), slippage_bps_per_side=0, maximum_endpoint_delay_seconds=0),
     )
     assert counts == {"2": 2}
-    assert columns["h2_valid"] == [True, True, False, False]
-    assert columns["h2_long_net_bps"][0] == (102 / 100.5 - 1) * 10_000
-    assert columns["h2_short_net_bps"][0] == (100 / 102.5 - 1) * 10_000
-    assert columns["h2_long_mfe_bps"][0] == (102 / 100.5 - 1) * 10_000
-    assert columns["h2_long_mae_bps"][0] == (101 / 100.5 - 1) * 10_000
+    assert columns["h2_valid"] == [True, True, False, False, False]
+    assert columns["h2_long_net_bps"][0] == (103 / 101.5 - 1) * 10_000
+    assert columns["h2_short_net_bps"][0] == (101 / 103.5 - 1) * 10_000
+    assert columns["h2_long_mfe_bps"][0] == (103 / 101.5 - 1) * 10_000
+    assert columns["h2_long_mae_bps"][0] == (101 / 101.5 - 1) * 10_000
+    assert columns["h2_entry_delay_seconds"][0] == 0.05
 
 
 def test_outcome_is_invalid_when_horizon_crosses_a_market_gap() -> None:
