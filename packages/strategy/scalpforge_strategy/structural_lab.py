@@ -174,21 +174,20 @@ def _register(output_root: Path, report: StructuralLabReport) -> None:
 
 
 def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Event]:
-    mids = features["mid"].to_pylist()
     spreads = features["spread_bps"].to_pylist()
     sessions = features["session"].to_pylist()
     volatility = features["realized_volatility_60s"].to_pylist()
     activity = features["tick_intensity_ratio"].to_pylist()
     sides = structure[f"breakout_side_{cfg.breakout_window_seconds}s"].to_pylist()
     valid = outcomes[f"h{cfg.horizon_seconds}_valid"].to_pylist()
-    delays = outcomes[f"h{cfg.horizon_seconds}_endpoint_delay_seconds"].to_pylist()
+    long_gross = outcomes[f"h{cfg.horizon_seconds}_long_gross_bps"].to_pylist()
+    short_gross = outcomes[f"h{cfg.horizon_seconds}_short_gross_bps"].to_pylist()
     longs = outcomes[f"h{cfg.horizon_seconds}_long_net_bps"].to_pylist()
     shorts = outcomes[f"h{cfg.horizon_seconds}_short_net_bps"].to_pylist()
     long_mfe = outcomes[f"h{cfg.horizon_seconds}_long_mfe_bps"].to_pylist()
     long_mae = outcomes[f"h{cfg.horizon_seconds}_long_mae_bps"].to_pylist()
     short_mfe = outcomes[f"h{cfg.horizon_seconds}_short_mfe_bps"].to_pylist()
     short_mae = outcomes[f"h{cfg.horizon_seconds}_short_mae_bps"].to_pylist()
-    timestamp_index = {value: index for index, value in enumerate(timestamps)}
     selected: list[_Event] = []
     episode_starts = episode_start_mask(
         timestamps,
@@ -200,12 +199,8 @@ def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Even
             continue
         if spreads[index] > cfg.maximum_spread_bps:
             continue
-        endpoint_time = timestamp + timedelta(seconds=cfg.horizon_seconds + delays[index])
-        endpoint = timestamp_index.get(endpoint_time)
-        if endpoint is None:
-            continue
         side = int(sides[index])
-        gross = (mids[endpoint] / mids[index] - 1) * 10_000 * side
+        gross = float(long_gross[index] if side > 0 else short_gross[index])
         net = float(longs[index] if side > 0 else shorts[index])
         random_side = 1 if hashlib.sha256(timestamp.isoformat().encode()).digest()[0] % 2 else -1
         random_net = float(longs[index] if random_side > 0 else shorts[index])

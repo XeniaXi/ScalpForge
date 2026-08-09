@@ -23,8 +23,11 @@ class OutcomeConfig:
     maximum_endpoint_delay_seconds: int = 2
     maximum_continuity_gap_seconds: int = 5
     decision_latency_ms: int = 50
+    schema_revision: int = 3
 
     def __post_init__(self) -> None:
+        if self.schema_revision < 3:
+            raise ValueError("outcome schema must include causal gross and net returns")
         if not self.horizons_seconds or min(self.horizons_seconds) <= 0:
             raise ValueError("outcome horizons must be positive")
         if len(set(self.horizons_seconds)) != len(self.horizons_seconds):
@@ -105,7 +108,7 @@ def write_outcome_dataset(
             del rows, outcome_table
         manifest = OutcomeDatasetManifest(
             dataset_id=dataset_id,
-            schema_version=2,
+            schema_version=3,
             created_at=datetime.now(UTC).isoformat(),
             source_feature_dataset_id=source_id,
             source_feature_manifest=str(feature_manifest.resolve()),
@@ -163,6 +166,8 @@ def _build_horizon(
             f"{prefix}_valid": [False] * count,
             f"{prefix}_entry_delay_seconds": [None] * count,
             f"{prefix}_endpoint_delay_seconds": [None] * count,
+            f"{prefix}_long_gross_bps": [None] * count,
+            f"{prefix}_short_gross_bps": [None] * count,
             f"{prefix}_long_net_bps": [None] * count,
             f"{prefix}_short_net_bps": [None] * count,
             f"{prefix}_long_mfe_bps": [None] * count,
@@ -203,9 +208,13 @@ def _build_horizon(
         long_exit = quotes.open_bid[endpoint] * (1 - slip)
         short_entry = quotes.open_bid[entry] * (1 - slip)
         short_exit = quotes.open_ask[endpoint] * (1 + slip)
+        entry_mid = (quotes.open_bid[entry] + quotes.open_ask[entry]) / 2
+        exit_mid = (quotes.open_bid[endpoint] + quotes.open_ask[endpoint]) / 2
         columns[f"{prefix}_valid"][index] = True
         columns[f"{prefix}_entry_delay_seconds"][index] = entry_delay.total_seconds()
         columns[f"{prefix}_endpoint_delay_seconds"][index] = delay.total_seconds()
+        columns[f"{prefix}_long_gross_bps"][index] = (exit_mid / entry_mid - 1) * 10_000
+        columns[f"{prefix}_short_gross_bps"][index] = (entry_mid / exit_mid - 1) * 10_000
         columns[f"{prefix}_long_net_bps"][index] = (long_exit / long_entry - 1) * 10_000
         columns[f"{prefix}_short_net_bps"][index] = (short_entry / short_exit - 1) * 10_000
         columns[f"{prefix}_long_mfe_bps"][index] = (

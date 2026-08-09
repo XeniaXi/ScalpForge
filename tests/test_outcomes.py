@@ -36,6 +36,8 @@ def test_outcomes_use_executable_sides_and_future_path_extrema() -> None:
     assert columns["h2_long_mfe_bps"][0] == (103 / 101.5 - 1) * 10_000
     assert columns["h2_long_mae_bps"][0] == (101 / 101.5 - 1) * 10_000
     assert columns["h2_entry_delay_seconds"][0] == 0.05
+    assert columns["h2_long_gross_bps"][0] == (103.25 / 101.25 - 1) * 10_000
+    assert columns["h2_short_gross_bps"][0] == (101.25 / 103.25 - 1) * 10_000
 
 
 def test_outcome_is_invalid_when_horizon_crosses_a_market_gap() -> None:
