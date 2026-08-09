@@ -19,6 +19,8 @@ from scalpforge_strategy.research_dataset import (
     WalkForwardFold,
     anchored_walk_forward_folds,
 )
+from scalpforge_strategy.structural import StructuralConfig, StructuralManifest
+from scalpforge_strategy.structural_lab import StructuralLabConfig, StructuralLabReport
 
 __all__ = [
     "AdvisorMandate",
@@ -30,6 +32,10 @@ __all__ = [
     "PromotionEvidence",
     "ResearchCouncil",
     "StrategyPortfolioLab",
+    "StructuralConfig",
+    "StructuralLabConfig",
+    "StructuralLabReport",
+    "StructuralManifest",
     "VirtualStrategyLedger",
     "VirtualStrategyMetrics",
     "WalkForwardConfig",
