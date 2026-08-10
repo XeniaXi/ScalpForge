@@ -50,8 +50,25 @@ def ingest_jforex_batches(
     output_root: Path,
     *,
     copy_to_archive: bool = True,
+    start_utc: datetime | None = None,
+    end_utc_exclusive: datetime | None = None,
 ) -> JForexBatchIngestManifest:
     batches = _validated_batches(source_dir)
+    if start_utc is not None or end_utc_exclusive is not None:
+        if (
+            start_utc is not None
+            and end_utc_exclusive is not None
+            and start_utc >= end_utc_exclusive
+        ):
+            raise ValueError("JForex ingestion range must be positive")
+        batches = [
+            batch
+            for batch in batches
+            if (start_utc is None or batch.start >= start_utc)
+            and (end_utc_exclusive is None or batch.end <= end_utc_exclusive)
+        ]
+        if not batches:
+            raise ValueError("no JForex batches fall inside requested range")
     source_hashes = [batch.sha256 for batch in batches]
     identity = json.dumps(
         {

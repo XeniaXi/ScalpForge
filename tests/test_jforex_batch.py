@@ -1,6 +1,7 @@
 import csv
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -78,3 +79,20 @@ def test_reference_source_avoids_duplicate_raw_archive(tmp_path: Path) -> None:
     assert not archive.exists()
     assert len(result.archived_manifests) == 1
     assert Path(result.archived_manifests[0]).parent == source.resolve()
+
+
+def test_ingestion_can_exclude_stale_batches_outside_requested_range(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    _batch(source, 0, [("2026-08-03T00:00:00.058Z", 4000.0, 4000.5)])
+    _batch(source, 1, [("2026-08-03T01:00:00.058Z", 4001.0, 4001.5)])
+    result = ingest_jforex_batches(
+        source,
+        tmp_path / "archive",
+        tmp_path / "curated",
+        start_utc=datetime(2026, 8, 3, 1, tzinfo=UTC),
+        end_utc_exclusive=datetime(2026, 8, 3, 2, tzinfo=UTC),
+    )
+    assert result.batch_count == 1
+    assert result.start_utc == "2026-08-03T01:00:00+00:00"
+    assert result.end_utc_exclusive == "2026-08-03T02:00:00+00:00"
