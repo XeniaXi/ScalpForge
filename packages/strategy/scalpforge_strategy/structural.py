@@ -4,7 +4,7 @@ import hashlib
 import json
 import shutil
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -85,64 +85,81 @@ def structural_rows(features: pa.Table, config: StructuralConfig) -> list[dict[s
 def _iter_structural_rows(
     features: pa.Table, config: StructuralConfig
 ) -> Iterator[dict[str, object]]:
-    timestamps = _utc_timestamps(features["occurred_at"])
-    mids = [float(value) for value in features["mid"].to_pylist()]
-    ticks = [int(value) for value in features["tick_count"].to_pylist()]
-    gaps = [bool(value) for value in features["is_gap_start"].to_pylist()]
+    yield from _iter_structural_batches([features], config)
+
+
+def _iter_structural_batches(
+    feature_batches: Iterable[pa.Table], config: StructuralConfig
+) -> Iterator[dict[str, object]]:
     windows = {seconds: _Window(seconds) for seconds in config.level_windows_seconds}
     session_key: tuple[object, ...] | None = None
     weighted_mid = activity = 0.0
-    for timestamp, mid, tick_count, gap in zip(timestamps, mids, ticks, gaps, strict=True):
-        current_session = (timestamp.date(), _session(timestamp))
-        if current_session != session_key or gap:
-            session_key = current_session
-            weighted_mid = activity = 0.0
-        levels: dict[int, tuple[float | None, float | None]] = {}
-        for seconds, window in windows.items():
-            window.expire(timestamp)
-            levels[seconds] = window.levels()
-        weight = max(tick_count, 1)
-        weighted_mid += mid * weight
-        activity += weight
-        tick_vwap = weighted_mid / activity
-        breakout_high, breakout_low = levels[config.breakout_window_seconds]
-        up_distance = (
-            (mid / breakout_high - 1) * 10_000 if breakout_high is not None else None
-        )
-        down_distance = (
-            (breakout_low / mid - 1) * 10_000 if breakout_low is not None else None
-        )
-        side = 0
-        distance = 0.0
-        if up_distance is not None and up_distance >= config.minimum_breakout_bps:
-            side, distance = 1, up_distance
-        elif down_distance is not None and down_distance >= config.minimum_breakout_bps:
-            side, distance = -1, down_distance
-        range_60 = _range_bps(levels.get(60), mid)
-        range_300 = _range_bps(levels.get(300), mid)
-        row: dict[str, object] = {
-            "occurred_at": timestamp,
-            "tick_vwap_proxy": tick_vwap,
-            "distance_from_tick_vwap_bps": (mid / tick_vwap - 1) * 10_000,
-            "compression_60_to_300": (
-                range_60 / range_300 if range_60 is not None and range_300 else None
-            ),
-            f"breakout_side_{config.breakout_window_seconds}s": side,
-            f"breakout_distance_bps_{config.breakout_window_seconds}s": distance,
-        }
-        for seconds, (high, low) in levels.items():
-            row[f"prior_high_{seconds}s"] = high
-            row[f"prior_low_{seconds}s"] = low
-        yield row
-        for window in windows.values():
-            window.add(timestamp, mid)
+    for features in feature_batches:
+        timestamps = _utc_timestamps(features["occurred_at"])
+        mids = [float(value) for value in features["mid"].to_pylist()]
+        ticks = [int(value) for value in features["tick_count"].to_pylist()]
+        gaps = [bool(value) for value in features["is_gap_start"].to_pylist()]
+        for timestamp, mid, tick_count, gap in zip(
+            timestamps, mids, ticks, gaps, strict=True
+        ):
+            current_session = (timestamp.date(), _session(timestamp))
+            if current_session != session_key or gap:
+                session_key = current_session
+                weighted_mid = activity = 0.0
+            levels: dict[int, tuple[float | None, float | None]] = {}
+            for seconds, window in windows.items():
+                window.expire(timestamp)
+                levels[seconds] = window.levels()
+            weight = max(tick_count, 1)
+            weighted_mid += mid * weight
+            activity += weight
+            tick_vwap = weighted_mid / activity
+            breakout_high, breakout_low = levels[config.breakout_window_seconds]
+            up_distance = (
+                (mid / breakout_high - 1) * 10_000
+                if breakout_high is not None
+                else None
+            )
+            down_distance = (
+                (breakout_low / mid - 1) * 10_000
+                if breakout_low is not None
+                else None
+            )
+            side = 0
+            distance = 0.0
+            if up_distance is not None and up_distance >= config.minimum_breakout_bps:
+                side, distance = 1, up_distance
+            elif down_distance is not None and down_distance >= config.minimum_breakout_bps:
+                side, distance = -1, down_distance
+            range_60 = _range_bps(levels.get(60), mid)
+            range_300 = _range_bps(levels.get(300), mid)
+            row: dict[str, object] = {
+                "occurred_at": timestamp,
+                "tick_vwap_proxy": tick_vwap,
+                "distance_from_tick_vwap_bps": (mid / tick_vwap - 1) * 10_000,
+                "compression_60_to_300": (
+                    range_60 / range_300 if range_60 is not None and range_300 else None
+                ),
+                f"breakout_side_{config.breakout_window_seconds}s": side,
+                f"breakout_distance_bps_{config.breakout_window_seconds}s": distance,
+            }
+            for seconds, (high, low) in levels.items():
+                row[f"prior_high_{seconds}s"] = high
+                row[f"prior_low_{seconds}s"] = low
+            yield row
+            for window in windows.values():
+                window.add(timestamp, mid)
 
 
 def write_structural_dataset(
     feature_manifest: Path,
     output_root: Path,
     config: StructuralConfig | None = None,
+    *,
+    write_batch_rows: int = 10_000,
 ) -> StructuralManifest:
+    if write_batch_rows <= 0:
+        raise ValueError("structural write batch must be positive")
     cfg = config or StructuralConfig()
     source = json.loads(feature_manifest.read_text(encoding="utf-8"))
     if source.get("point_in_time") is not True or source.get("labels_included") is not False:
@@ -156,7 +173,6 @@ def write_structural_dataset(
     manifest_path = root / "manifest.json"
     if manifest_path.exists():
         return StructuralManifest(**json.loads(manifest_path.read_text(encoding="utf-8")))
-    table = _read_features(feature_manifest, source)
     staging = output_root / f"{dataset_id}.partial"
     staging.mkdir(parents=True, exist_ok=False)
     writer: pq.ParquetWriter | None = None
@@ -165,10 +181,11 @@ def write_structural_dataset(
         buffer: list[dict[str, object]] = []
         row_count = 0
         columns: list[str] = []
-        for row in _iter_structural_rows(table, cfg):
+        feature_batches = _read_feature_batches(feature_manifest, source, write_batch_rows)
+        for row in _iter_structural_batches(feature_batches, cfg):
             buffer.append(row)
             row_count += 1
-            if len(buffer) == 100_000:
+            if len(buffer) == write_batch_rows:
                 writer, columns = _write_buffer(buffer, partition, writer)
                 buffer = []
         if buffer:
@@ -201,20 +218,22 @@ def write_structural_dataset(
         raise
 
 
-def _read_features(manifest: Path, meta: dict[str, object]) -> pa.Table:
+def _read_feature_batches(
+    manifest: Path, meta: dict[str, object], batch_rows: int
+) -> Iterator[pa.Table]:
     root = manifest.resolve().parent
     partitions = meta.get("partitions")
     if not isinstance(partitions, list) or not partitions:
         raise ValueError("feature manifest has no partitions")
-    tables = []
     for stored in partitions:
         path = Path(str(stored)).resolve()
         if not path.is_relative_to(root):
             raise ValueError("feature partition escapes manifest directory")
-        tables.append(
-            pq.read_table(path, columns=["occurred_at", "mid", "tick_count", "is_gap_start"])
-        )
-    return pa.concat_tables(tables)
+        for batch in pq.ParquetFile(path).iter_batches(
+            batch_size=batch_rows,
+            columns=["occurred_at", "mid", "tick_count", "is_gap_start"],
+        ):
+            yield pa.Table.from_batches([batch])
 
 
 def _range_bps(levels: tuple[float | None, float | None] | None, mid: float) -> float | None:

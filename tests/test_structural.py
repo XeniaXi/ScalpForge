@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pyarrow as pa  # type: ignore[import-untyped]
+import pyarrow.parquet as pq  # type: ignore[import-untyped]
 from scalpforge_strategy.structural import (
     StructuralConfig,
     structural_rows,
@@ -43,8 +44,6 @@ def test_structural_artifact_is_research_only(tmp_path) -> None:
     folder = tmp_path / "features"
     folder.mkdir()
     partition = folder / "features.parquet"
-    import pyarrow.parquet as pq  # type: ignore[import-untyped]
-
     pq.write_table(_features([100.0, 101.0]), partition)
     manifest = folder / "manifest.json"
     manifest.write_text(
@@ -66,3 +65,35 @@ def test_structural_artifact_is_research_only(tmp_path) -> None:
     assert result.point_in_time
     assert not result.labels_included
     assert result.external_non_executable
+
+
+def test_streamed_structure_preserves_windows_across_batches(tmp_path) -> None:
+    folder = tmp_path / "features-streamed"
+    folder.mkdir()
+    source = _features([100.0, 101.0, 102.0, 99.0, 103.0, 98.0])
+    partition = folder / "features.parquet"
+    pq.write_table(source, partition, row_group_size=2)
+    manifest = folder / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "dataset_id": "features-streamed",
+                "point_in_time": True,
+                "labels_included": False,
+                "partitions": [str(partition)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = StructuralConfig((2,), breakout_window_seconds=2)
+    expected = structural_rows(source, config)
+    result = write_structural_dataset(
+        manifest, tmp_path / "structure-streamed", config, write_batch_rows=2
+    )
+    actual = pq.read_table(result.partitions[0])
+    assert actual["occurred_at"].cast(pa.int64()).to_pylist() == source[
+        "occurred_at"
+    ].cast(pa.int64()).to_pylist()
+    for name in actual.column_names:
+        if name != "occurred_at":
+            assert actual[name].to_pylist() == [row[name] for row in expected]
