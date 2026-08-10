@@ -11,7 +11,6 @@ from pathlib import Path
 import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
-from scalpforge_strategy.episodes import episode_start_mask
 from scalpforge_strategy.experiment_registry import register_experiment
 from scalpforge_strategy.research_dataset import WalkForwardConfig, anchored_walk_forward_folds
 
@@ -103,21 +102,19 @@ def run_structural_lab(
         raise ValueError("structural dataset does not belong to feature dataset")
     if outcome_meta.get("source_feature_dataset_id") != feature_id:
         raise ValueError("outcome dataset does not belong to feature dataset")
-    features = _read_all(feature_manifest, feature_meta)
-    structure = _read_all(structural_manifest, structure_meta)
-    outcomes = _read_horizon(outcome_manifest, outcome_meta, str(cfg.horizon_seconds))
-    if len({features.num_rows, structure.num_rows, outcomes.num_rows}) != 1:
-        raise ValueError("research datasets have different row counts")
-    timestamps = _utc_timestamps(features["occurred_at"])
-    if timestamps != _utc_timestamps(structure["occurred_at"]):
-        raise ValueError("structural timestamps do not align")
-    if timestamps != _utc_timestamps(outcomes["occurred_at"]):
-        raise ValueError("outcome timestamps do not align")
-    start = timestamps[0].replace(hour=0, minute=0, second=0, microsecond=0)
-    end = timestamps[-1].replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    start, end = _dataset_bounds(feature_manifest, feature_meta)
     holdout_start = end - timedelta(days=cfg.final_holdout_days)
     folds = anchored_walk_forward_folds(start, holdout_start, cfg.walk_forward)
-    events = _events(features, structure, outcomes, timestamps, folds, cfg)
+    batches = _aligned_research_batches(
+        feature_manifest,
+        feature_meta,
+        structural_manifest,
+        structure_meta,
+        outcome_manifest,
+        outcome_meta,
+        cfg,
+    )
+    events = _events_from_batches(batches, folds, cfg)
     metrics = _slice_metrics(events, cfg)
     serialized = json.loads(json.dumps(asdict(cfg), default=str))
     identity = json.dumps(
@@ -174,6 +171,43 @@ def _register(output_root: Path, report: StructuralLabReport) -> None:
 
 
 def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Event]:
+    return _events_from_batches([(features, structure, outcomes)], folds, cfg)
+
+
+def _events_from_batches(batches, folds, cfg) -> list[_Event]:
+    selected: list[_Event] = []
+    previous_state: int | None = None
+    previous_timestamp: datetime | None = None
+    for features, structure, outcomes in batches:
+        timestamps = _utc_timestamps(features["occurred_at"])
+        if timestamps != _utc_timestamps(structure["occurred_at"]):
+            raise ValueError("structural timestamps do not align")
+        if timestamps != _utc_timestamps(outcomes["occurred_at"]):
+            raise ValueError("outcome timestamps do not align")
+        batch_events, previous_state, previous_timestamp = _batch_events(
+            features,
+            structure,
+            outcomes,
+            timestamps,
+            folds,
+            cfg,
+            previous_state,
+            previous_timestamp,
+        )
+        selected.extend(batch_events)
+    return selected
+
+
+def _batch_events(
+    features,
+    structure,
+    outcomes,
+    timestamps,
+    folds,
+    cfg,
+    previous_state,
+    previous_timestamp,
+):
     spreads = features["spread_bps"].to_pylist()
     sessions = features["session"].to_pylist()
     volatility = features["realized_volatility_60s"].to_pylist()
@@ -189,13 +223,21 @@ def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Even
     short_mfe = outcomes[f"h{cfg.horizon_seconds}_short_mfe_bps"].to_pylist()
     short_mae = outcomes[f"h{cfg.horizon_seconds}_short_mae_bps"].to_pylist()
     selected: list[_Event] = []
-    episode_starts = episode_start_mask(
-        timestamps,
-        [int(side) if side else None for side in sides],
-        cfg.decision_interval_seconds,
-    )
     for index, timestamp in enumerate(timestamps):
-        if not episode_starts[index] or not _in_tests(timestamp, folds) or not valid[index]:
+        if previous_timestamp is not None and timestamp <= previous_timestamp:
+            raise ValueError("episode timestamps must be strictly increasing")
+        state = int(sides[index]) if sides[index] else None
+        discontinuity = (
+            previous_timestamp is None
+            or (timestamp - previous_timestamp).total_seconds()
+            > cfg.decision_interval_seconds
+        )
+        episode_start = state is not None and (
+            discontinuity or state != previous_state
+        )
+        previous_state = state
+        previous_timestamp = timestamp
+        if not episode_start or not _in_tests(timestamp, folds) or not valid[index]:
             continue
         if spreads[index] > cfg.maximum_spread_bps:
             continue
@@ -227,7 +269,7 @@ def _events(features, structure, outcomes, timestamps, folds, cfg) -> list[_Even
                 classification,
             )
         )
-    return selected
+    return selected, previous_state, previous_timestamp
 
 
 def _slice_metrics(events: list[_Event], cfg: StructuralLabConfig) -> list[SliceMetrics]:
@@ -304,21 +346,46 @@ def _meta(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _read_all(manifest: Path, meta: dict[str, object]) -> pa.Table:
+def _dataset_bounds(
+    manifest: Path, meta: dict[str, object]
+) -> tuple[datetime, datetime]:
+    first = meta.get("first_timestamp")
+    last = meta.get("last_timestamp")
+    if first and last:
+        start_value = datetime.fromisoformat(str(first)).astimezone(UTC)
+        last_value = datetime.fromisoformat(str(last)).astimezone(UTC)
+    else:
+        paths = _partition_paths(manifest, meta)
+        first_file = pq.ParquetFile(paths[0])
+        last_file = pq.ParquetFile(paths[-1])
+        first_table = first_file.read_row_group(0, columns=["occurred_at"])
+        last_table = last_file.read_row_group(
+            last_file.num_row_groups - 1, columns=["occurred_at"]
+        )
+        start_value = _utc_timestamps(first_table["occurred_at"])[0]
+        last_value = _utc_timestamps(last_table["occurred_at"])[-1]
+    start = start_value.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = last_value.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(
+        days=1
+    )
+    return start, end
+
+
+def _partition_paths(manifest: Path, meta: dict[str, object]) -> list[Path]:
     root = manifest.resolve().parent
     parts = meta.get("partitions")
     if not isinstance(parts, list) or not parts:
         raise ValueError("manifest has no partitions")
-    tables = []
+    paths: list[Path] = []
     for stored in parts:
         path = Path(str(stored)).resolve()
         if not path.is_relative_to(root):
             raise ValueError("partition escapes manifest directory")
-        tables.append(pq.read_table(path))
-    return pa.concat_tables(tables)
+        paths.append(path)
+    return paths
 
 
-def _read_horizon(manifest, meta, horizon) -> pa.Table:
+def _horizon_path(manifest, meta, horizon) -> Path:
     mapping = meta.get("horizon_partitions")
     if not isinstance(mapping, dict) or horizon not in mapping:
         raise ValueError("outcome manifest does not contain requested horizon")
@@ -326,7 +393,76 @@ def _read_horizon(manifest, meta, horizon) -> pa.Table:
     path = Path(str(mapping[horizon])).resolve()
     if not path.is_relative_to(root):
         raise ValueError("outcome partition escapes manifest directory")
-    return pq.read_table(path)
+    return path
+
+
+def _aligned_research_batches(
+    feature_manifest,
+    feature_meta,
+    structural_manifest,
+    structural_meta,
+    outcome_manifest,
+    outcome_meta,
+    cfg,
+    batch_size: int = 50_000,
+):
+    feature_columns = [
+        "occurred_at",
+        "spread_bps",
+        "session",
+        "realized_volatility_60s",
+        "tick_intensity_ratio",
+    ]
+    structure_columns = [
+        "occurred_at",
+        f"breakout_side_{cfg.breakout_window_seconds}s",
+    ]
+    prefix = f"h{cfg.horizon_seconds}"
+    outcome_columns = [
+        "occurred_at",
+        f"{prefix}_valid",
+        f"{prefix}_long_gross_bps",
+        f"{prefix}_short_gross_bps",
+        f"{prefix}_long_net_bps",
+        f"{prefix}_short_net_bps",
+        f"{prefix}_long_mfe_bps",
+        f"{prefix}_long_mae_bps",
+        f"{prefix}_short_mfe_bps",
+        f"{prefix}_short_mae_bps",
+    ]
+    feature_batches = _table_batches(
+        _partition_paths(feature_manifest, feature_meta), feature_columns, batch_size
+    )
+    structure_batches = _table_batches(
+        _partition_paths(structural_manifest, structural_meta),
+        structure_columns,
+        batch_size,
+    )
+    outcome_batches = _table_batches(
+        [_horizon_path(outcome_manifest, outcome_meta, str(cfg.horizon_seconds))],
+        outcome_columns,
+        batch_size,
+    )
+    sentinel = object()
+    while True:
+        feature = next(feature_batches, sentinel)
+        structure = next(structure_batches, sentinel)
+        outcome = next(outcome_batches, sentinel)
+        if feature is sentinel and structure is sentinel and outcome is sentinel:
+            return
+        if feature is sentinel or structure is sentinel or outcome is sentinel:
+            raise ValueError("research datasets have different row counts")
+        if len({feature.num_rows, structure.num_rows, outcome.num_rows}) != 1:
+            raise ValueError("research batch row counts do not align")
+        yield feature, structure, outcome
+
+
+def _table_batches(paths, columns, batch_size):
+    for path in paths:
+        for batch in pq.ParquetFile(path).iter_batches(
+            batch_size=batch_size, columns=columns
+        ):
+            yield pa.Table.from_batches([batch])
 
 
 def _utc_timestamps(column: pa.ChunkedArray) -> list[datetime]:
