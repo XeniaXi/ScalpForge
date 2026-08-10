@@ -74,6 +74,7 @@ def test_outcomes_are_separate_content_addressed_artifact(tmp_path) -> None:
         manifest,
         tmp_path / "outcomes",
         OutcomeConfig((1,), slippage_bps_per_side=0),
+        write_batch_rows=1,
     )
     second = write_outcome_dataset(
         manifest,
@@ -86,3 +87,35 @@ def test_outcomes_are_separate_content_addressed_artifact(tmp_path) -> None:
     assert first.row_count == 3
     assert first.horizon_partitions["1"].endswith("horizon=1\\outcomes.parquet")
     assert len(first.partitions) == 1
+
+
+def test_streamed_outcomes_match_in_memory_columns(tmp_path) -> None:
+    features = tmp_path / "features-streamed"
+    features.mkdir()
+    source = feature_table(list(range(12)), [100 + value for value in range(12)])
+    partition = features / "features.parquet"
+    pq.write_table(source, partition, row_group_size=3)
+    manifest = features / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "dataset_id": "features-streamed",
+                "point_in_time": True,
+                "labels_included": False,
+                "partitions": [str(partition)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = OutcomeConfig((2,), slippage_bps_per_side=0)
+    expected, _ = build_outcome_columns(source, config)
+    result = write_outcome_dataset(
+        manifest, tmp_path / "outcomes-streamed", config, write_batch_rows=3
+    )
+    actual_table = pq.read_table(result.horizon_partitions["2"])
+    assert actual_table["occurred_at"].cast(pa.int64()).to_pylist() == source[
+        "occurred_at"
+    ].cast(pa.int64()).to_pylist()
+    for name, values in expected.items():
+        if name != "occurred_at":
+            assert actual_table[name].to_pylist() == values

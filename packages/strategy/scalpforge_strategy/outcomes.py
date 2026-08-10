@@ -64,7 +64,11 @@ def write_outcome_dataset(
     feature_manifest: Path,
     output_root: Path,
     config: OutcomeConfig | None = None,
+    *,
+    write_batch_rows: int = 50_000,
 ) -> OutcomeDatasetManifest:
+    if write_batch_rows <= 0:
+        raise ValueError("outcome write batch must be positive")
     outcome_config = config or OutcomeConfig()
     serialized_config = json.loads(json.dumps(asdict(outcome_config)))
     source = json.loads(feature_manifest.read_text(encoding="utf-8"))
@@ -80,8 +84,6 @@ def write_outcome_dataset(
     if manifest_path.exists():
         return OutcomeDatasetManifest(**json.loads(manifest_path.read_text(encoding="utf-8")))
 
-    table = _read_feature_table(feature_manifest, source)
-    quotes = _outcome_inputs(table, outcome_config)
     staging = output_root / f"{dataset_id}.partial"
     staging.mkdir(parents=True, exist_ok=False)
     try:
@@ -89,30 +91,34 @@ def write_outcome_dataset(
         horizon_partitions: dict[str, str] = {}
         valid_counts: dict[str, int] = {}
         outcome_columns: list[str] = []
+        row_count: int | None = None
         for horizon in outcome_config.horizons_seconds:
-            rows, valid = _build_horizon(
-                quotes, horizon, outcome_config
-            )
             horizon_dir = staging / f"horizon={horizon}"
             horizon_dir.mkdir()
             partition = horizon_dir / "outcomes.parquet"
-            outcome_table = pa.Table.from_pydict(rows)
-            pq.write_table(outcome_table, partition, compression="zstd", row_group_size=100_000)
+            written, valid, columns = _write_horizon_streaming(
+                feature_manifest,
+                source,
+                partition,
+                horizon,
+                outcome_config,
+                write_batch_rows,
+            )
+            if row_count is not None and written != row_count:
+                raise ValueError("outcome horizons produced different row counts")
+            row_count = written
             final_partition = root / f"horizon={horizon}" / partition.name
             partitions.append(str(final_partition))
             horizon_partitions[str(horizon)] = str(final_partition)
             valid_counts[str(horizon)] = valid
-            outcome_columns.extend(
-                name for name in outcome_table.column_names if name != "occurred_at"
-            )
-            del rows, outcome_table
+            outcome_columns.extend(name for name in columns if name != "occurred_at")
         manifest = OutcomeDatasetManifest(
             dataset_id=dataset_id,
             schema_version=3,
             created_at=datetime.now(UTC).isoformat(),
             source_feature_dataset_id=source_id,
             source_feature_manifest=str(feature_manifest.resolve()),
-            row_count=len(quotes.occurred_at),
+            row_count=row_count or 0,
             valid_counts=valid_counts,
             outcome_config=serialized_config,
             outcome_columns=["occurred_at", *outcome_columns],
@@ -128,6 +134,142 @@ def write_outcome_dataset(
         if staging.exists():
             shutil.rmtree(staging)
         raise
+
+
+def _write_horizon_streaming(
+    feature_manifest: Path,
+    source: dict[str, object],
+    partition: Path,
+    horizon: int,
+    config: OutcomeConfig,
+    write_batch_rows: int,
+) -> tuple[int, int, list[str]]:
+    """Build one horizon with bounded memory and enough causal look-ahead."""
+    writer: pq.ParquetWriter | None = None
+    written = 0
+    valid_total = 0
+    columns: list[str] = []
+    try:
+        for feature_window, core_rows in _feature_windows(
+            feature_manifest,
+            source,
+            horizon,
+            config,
+            write_batch_rows,
+        ):
+            quotes = _outcome_inputs(feature_window, config)
+            rows, _ = _build_horizon(quotes, horizon, config)
+            table = pa.Table.from_pydict(rows, schema=_outcome_schema(horizon)).slice(
+                0, core_rows
+            )
+            writer = writer or pq.ParquetWriter(partition, table.schema, compression="zstd")
+            writer.write_table(table, row_group_size=write_batch_rows)
+            columns = table.column_names
+            written += core_rows
+            valid_total += sum(table[f"h{horizon}_valid"].to_pylist())
+            del quotes, rows, table, feature_window
+        if writer is None:
+            raise ValueError("feature dataset is empty")
+        return written, valid_total, columns
+    finally:
+        if writer is not None:
+            writer.close()
+
+
+def _feature_windows(
+    feature_manifest: Path,
+    source: dict[str, object],
+    horizon: int,
+    config: OutcomeConfig,
+    core_rows: int,
+):
+    batches = iter(_feature_batches(feature_manifest, source, core_rows))
+    buffered: pa.Table | None = None
+    exhausted = False
+    while buffered is not None or not exhausted:
+        while buffered is None or buffered.num_rows < core_rows:
+            try:
+                incoming = pa.Table.from_batches([next(batches)])
+            except StopIteration:
+                exhausted = True
+                break
+            buffered = incoming if buffered is None else pa.concat_tables([buffered, incoming])
+        if buffered is None or buffered.num_rows == 0:
+            break
+        output_rows = min(core_rows, buffered.num_rows)
+        last_core_available = _timestamp_at(buffered["feature_available_at"], output_rows - 1)
+        lookahead = timedelta(
+            seconds=(
+                horizon
+                + config.maximum_entry_delay_seconds
+                + config.maximum_endpoint_delay_seconds
+            ),
+            milliseconds=config.decision_latency_ms,
+        )
+        target_quote = last_core_available + lookahead
+        while not exhausted and _timestamp_at(buffered["bar_open_at"], -1) < target_quote:
+            try:
+                incoming = pa.Table.from_batches([next(batches)])
+            except StopIteration:
+                exhausted = True
+                break
+            buffered = pa.concat_tables([buffered, incoming])
+        yield buffered, output_rows
+        buffered = buffered.slice(output_rows)
+        if buffered.num_rows == 0:
+            buffered = None
+
+
+def _feature_batches(
+    feature_manifest: Path,
+    source: dict[str, object],
+    batch_rows: int,
+):
+    root = feature_manifest.resolve().parent
+    columns = [
+        "occurred_at",
+        "feature_available_at",
+        "bar_open_at",
+        "bar_open_bid",
+        "bar_open_ask",
+    ]
+    for stored in source.get("partitions", []):  # type: ignore[union-attr]
+        path = Path(str(stored)).resolve()
+        if not path.is_relative_to(root):
+            raise ValueError("feature partition escapes manifest directory")
+        yield from pq.ParquetFile(path).iter_batches(batch_size=batch_rows, columns=columns)
+
+
+def _timestamp_at(column: pa.ChunkedArray, index: int) -> datetime:
+    unit = column.type.unit
+    divisor = {"s": 1, "ms": 1_000, "us": 1_000_000, "ns": 1_000_000_000}[unit]
+    value = column.cast(pa.int64())[index].as_py()
+    return datetime.fromtimestamp(value / divisor, UTC)
+
+
+def _outcome_schema(horizon: int) -> pa.Schema:
+    prefix = f"h{horizon}"
+    return pa.schema(
+        [
+            pa.field("occurred_at", pa.timestamp("us", tz="UTC")),
+            pa.field(f"{prefix}_valid", pa.bool_()),
+            *[
+                pa.field(f"{prefix}_{suffix}", pa.float64())
+                for suffix in (
+                    "entry_delay_seconds",
+                    "endpoint_delay_seconds",
+                    "long_gross_bps",
+                    "short_gross_bps",
+                    "long_net_bps",
+                    "short_net_bps",
+                    "long_mfe_bps",
+                    "long_mae_bps",
+                    "short_mfe_bps",
+                    "short_mae_bps",
+                )
+            ],
+        ]
+    )
 
 
 def build_outcome_columns(
