@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from collections import deque
 from collections.abc import Iterable, Iterator
 from dataclasses import asdict, dataclass
@@ -223,7 +224,11 @@ def write_feature_dataset(
     source_manifest: Path,
     output_root: Path,
     config: FeatureConfig | None = None,
+    *,
+    write_batch_rows: int = 10_000,
 ) -> FeatureDatasetManifest:
+    if write_batch_rows <= 0:
+        raise ValueError("feature write batch must be positive")
     feature_config = config or FeatureConfig()
     serialized_config = json.loads(json.dumps(asdict(feature_config)))
     source_payload = json.loads(source_manifest.read_text(encoding="utf-8"))
@@ -252,7 +257,7 @@ def write_feature_dataset(
             last = row["occurred_at"]  # type: ignore[assignment]
             buffer.append(row)
             row_count += 1
-            if len(buffer) >= 100_000:
+            if len(buffer) >= write_batch_rows:
                 writer = _write_buffer(buffer, partition, writer)
                 buffer = []
         if buffer:
@@ -281,6 +286,12 @@ def write_feature_dataset(
         )
         staging.replace(dataset_root)
         return manifest
+    except Exception:
+        if writer is not None:
+            writer.close()
+            writer = None
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
     finally:
         if writer is not None:
             writer.close()

@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
+import pytest
 from scalpforge_core.models import MarketTick
 from scalpforge_strategy.research_dataset import (
     PointInTimeFeatureBuilder,
@@ -76,3 +77,23 @@ def test_feature_dataset_is_content_addressed_and_has_no_labels(tmp_path) -> Non
     table = pq.read_table(first.partitions[0])
     assert table.num_rows == 2
     assert "return_1s" in table.column_names
+
+
+def test_feature_writer_uses_small_batches_and_cleans_failed_staging(tmp_path) -> None:
+    source = tmp_path / "source" / "manifest.json"
+    source.parent.mkdir()
+    source.write_text(json.dumps({"dataset_id": "ticks-failure"}), encoding="utf-8")
+
+    def broken_ticks():
+        yield tick(0, 100)
+        yield tick(1, 101)
+        raise RuntimeError("source failed")
+
+    with pytest.raises(RuntimeError, match="source failed"):
+        write_feature_dataset(
+            broken_ticks(),
+            source,
+            tmp_path / "features",
+            write_batch_rows=1,
+        )
+    assert not list((tmp_path / "features").glob("*.partial"))
