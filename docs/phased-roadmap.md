@@ -38,6 +38,11 @@ five-minute continuation and reversal utility; insufficient advantage becomes `a
 
 Gate: every feature declares availability and every label remains in a separate future artifact.
 
+Trade-history observation is optional supporting evidence, not a gate. If provider or copied
+histories are unavailable, strategy discovery proceeds from immutable tick, macro-event, and news
+datasets. Session-range hypotheses use independently implemented, causal Asia, London-open, and
+New-York-open ranges; a range is unavailable until its defining window has completely closed.
+
 ## Phase 2D — Interpretable models
 
 Begin with regularized logistic regression and shallow boosted trees. Calibrate probabilities on
