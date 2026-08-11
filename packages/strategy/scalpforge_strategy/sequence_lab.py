@@ -731,6 +731,7 @@ def _aligned_windows(
         "tick_count",
         "quote_change_count",
         "spread_shock_ratio",
+        "session",
         "return_5s",
         "return_30s",
     ]
