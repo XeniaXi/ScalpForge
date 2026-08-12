@@ -1,0 +1,16 @@
+{
+  "calendar_id": "replace-with-versioned-broker-calendar-id",
+  "instrument": "XAUUSD",
+  "venue": "replace-with-exact-broker-server",
+  "timezone": "Etc/UTC",
+  "effective_from": "2025-01-01",
+  "effective_to_exclusive": "2027-01-01",
+  "weekly_open_windows": [
+    {"weekday": 0, "start": "00:00:00", "end": "23:59:59"}
+  ],
+  "closed_intervals": [],
+  "source_url": "https://replace-with-authoritative-broker-source.example",
+  "source_retrieved_at": "2026-08-12T00:00:00Z",
+  "source_sha256": "replace-with-64-character-source-snapshot-sha256-digest............",
+  "verified": false
+}

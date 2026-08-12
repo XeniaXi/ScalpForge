@@ -12,6 +12,7 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from .experiment_registry import register_experiment
 from .gold_strategy_tournament import _add_months, _next_month
+from .market_session_calendar import SessionCalendar, load_session_calendar
 from .trend_candidate_audit import _meta, _read, _timestamps
 
 
@@ -49,6 +50,8 @@ class GapSemanticsReport:
     continuity_partition: str
     continuity_columns: list[str]
     limitations: list[str]
+    session_calendar: dict[str, str] | None
+    market_state_counts: dict[str, int]
     recommendation: str
     automatic_rule_change_applied: bool = False
     candidate_frozen: bool = True
@@ -61,6 +64,7 @@ def run_gap_semantics_audit(
     outcome_manifest: Path,
     output_root: Path,
     config: GapSemanticsConfig | None = None,
+    session_calendar_path: Path | None = None,
 ) -> GapSemanticsReport:
     cfg = config or GapSemanticsConfig()
     episode_meta, outcome_meta = _meta(episode_manifest), _meta(outcome_manifest)
@@ -69,6 +73,7 @@ def run_gap_semantics_audit(
     source_manifest = Path(str(multi_meta["source_feature_manifest"])).resolve()
     source_meta = _meta(source_manifest)
     _validate(episode_meta, outcome_meta, multi_meta, source_meta, cfg)
+    calendar = load_session_calendar(session_calendar_path) if session_calendar_path else None
 
     episodes = _read(episode_manifest, episode_meta)
     outcomes = _read(outcome_manifest, outcome_meta)
@@ -106,7 +111,7 @@ def run_gap_semantics_audit(
     observed_durations: list[float] = []
     executable_boundaries = 0
     inspected_interruptions = 0
-    interval_rows = _continuity_intervals(raw_times, raw_seconds, bids, asks, cfg)
+    interval_rows = _continuity_intervals(raw_times, raw_seconds, bids, asks, cfg, calendar)
     for timestamp in rejected:
         mindex = multi_index.get(timestamp)
         if mindex is None:
@@ -160,8 +165,12 @@ def run_gap_semantics_audit(
         "episodes": episode_meta["dataset_id"], "outcomes": outcome_meta["dataset_id"],
         "config": asdict(cfg),
     }
+    report_identity = {
+        **payload,
+        "calendar": calendar.config_sha256 if calendar else None,
+    }
     report_id = "gap-semantics-audit-" + hashlib.sha256(
-        json.dumps(payload, sort_keys=True).encode()
+        json.dumps(report_identity, sort_keys=True).encode()
     ).hexdigest()[:16]
     root = output_root / report_id
     root.mkdir(parents=True, exist_ok=True)
@@ -189,7 +198,12 @@ def run_gap_semantics_audit(
             "source rows do not expose separate bid/ask update ages or receive timestamps",
             "executable boundary means valid observed two-sided quote, not guaranteed fill",
             "diagnostic 30/60/120-second thresholds must not be ranked by strategy returns",
-        ], recommendation,
+        ] if calendar is None else [
+            "source rows do not expose separate bid/ask update ages or receive timestamps",
+            "executable boundary means valid observed two-sided quote, not guaranteed fill",
+            "diagnostic 30/60/120-second thresholds must not be ranked by strategy returns",
+            "calendar classifications are valid only for its venue and effective date range",
+        ], _calendar_metadata(calendar), _counts(interval_rows, "market_state"), recommendation,
     )
     (root / "report.json").write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
     register_experiment(
@@ -213,7 +227,7 @@ def _classify(
     return "long_quote_interruption_or_closure_unknown"
 
 
-def _continuity_intervals(times, seconds, bids, asks, cfg):
+def _continuity_intervals(times, seconds, bids, asks, cfg, calendar=None):
     rows = []
     for index in range(1, len(times)):
         if seconds[index] is None or float(seconds[index]) <= cfg.stale_quote_seconds:
@@ -234,7 +248,7 @@ def _continuity_intervals(times, seconds, bids, asks, cfg):
                 if duration <= cfg.short_interruption_seconds
                 else "long_quote_interruption"
             ),
-            "market_state": "unknown_calendar_unavailable",
+            "market_state": _market_state(calendar, times[index - 1], times[index]),
             "pre_gap_bid": pre_bid,
             "pre_gap_ask": pre_ask,
             "post_gap_bid": post_bid,
@@ -250,6 +264,35 @@ def _continuity_intervals(times, seconds, bids, asks, cfg):
             "source_sequence_status": "unavailable",
         })
     return rows
+
+
+def _market_state(calendar: SessionCalendar | None, start: datetime, end: datetime) -> str:
+    return calendar.classify(start, end) if calendar else "unknown_calendar_unavailable"
+
+
+def _calendar_metadata(calendar: SessionCalendar | None) -> dict[str, str] | None:
+    if calendar is None:
+        return None
+    return {
+        "calendar_id": calendar.calendar_id,
+        "instrument": calendar.instrument,
+        "venue": calendar.venue,
+        "timezone": str(calendar.timezone),
+        "effective_from": calendar.effective_from.isoformat(),
+        "effective_to_exclusive": calendar.effective_to_exclusive.isoformat(),
+        "source_url": calendar.source_url,
+        "source_retrieved_at": calendar.source_retrieved_at,
+        "source_sha256": calendar.source_sha256,
+        "config_sha256": calendar.config_sha256,
+    }
+
+
+def _counts(rows, field):
+    result = {}
+    for row in rows:
+        value = str(row[field])
+        result[value] = result.get(value, 0) + 1
+    return result
 
 
 def _continuity_columns():

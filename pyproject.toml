@@ -17,6 +17,7 @@ dependencies = [
   "structlog>=24,<26",
   "prometheus-client>=0.21,<1",
   "pyarrow>=25,<26",
+  "tzdata>=2025.2",
 ]
 
 [project.optional-dependencies]

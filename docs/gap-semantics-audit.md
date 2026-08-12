@@ -26,3 +26,11 @@ long silence was a scheduled closure.
 The report's recommendation is a research decision only. Any revised continuity
 rule must be frozen and tested on new development or prospective data rather than
 chosen from Candidate A returns.
+
+An optional `--session-calendar` accepts a verified, effective-dated JSON schedule.
+The loader refuses example or unverified schedules, requires authoritative-source
+provenance and hashes the exact configuration. With a calendar, interruptions are
+classified as `scheduled_closed`, `unexpected_open_time_interruption`, or
+`calendar_out_of_effective_range`. The included example is intentionally invalid
+until its placeholder schedule and provenance are replaced and independently
+verified against the exact broker/server instrument.

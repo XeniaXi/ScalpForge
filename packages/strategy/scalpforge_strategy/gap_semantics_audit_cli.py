@@ -13,7 +13,9 @@ def main() -> None:
     parser.add_argument("--episode-manifest", type=Path, required=True)
     parser.add_argument("--outcome-manifest", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
+    parser.add_argument("--session-calendar", type=Path)
     args = parser.parse_args()
     print(json.dumps(asdict(run_gap_semantics_audit(
-        args.episode_manifest, args.outcome_manifest, args.output_root
+        args.episode_manifest, args.outcome_manifest, args.output_root,
+        session_calendar_path=args.session_calendar,
     ))))
