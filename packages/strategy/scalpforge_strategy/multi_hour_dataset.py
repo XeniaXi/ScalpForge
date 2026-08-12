@@ -20,7 +20,8 @@ class MultiHourConfig:
     level_windows_seconds: tuple[int, ...] = (14400, 28800, 43200)
     short_volatility_seconds: int = 1800
     long_volatility_seconds: int = 7200
-    schema_revision: int = 3
+    maximum_open_quote_silence_seconds: int = 60
+    schema_revision: int = 4
 
     def __post_init__(self) -> None:
         if self.decision_bar_seconds <= 0:
@@ -30,6 +31,8 @@ class MultiHourConfig:
             raise ValueError("all windows must be positive multiples of the decision bar")
         if self.short_volatility_seconds >= self.long_volatility_seconds:
             raise ValueError("short volatility window must be shorter than long window")
+        if self.maximum_open_quote_silence_seconds <= 0:
+            raise ValueError("maximum open quote silence must be positive")
 
 
 @dataclass(frozen=True)
@@ -124,6 +127,7 @@ def _aggregate_tables(tables: object, cfg: MultiHourConfig) -> list[dict[str, ob
             "tick_count",
             "quote_change_count",
             "is_gap_start",
+            "seconds_since_previous_active_bar",
         }
         if not required.issubset(names):
             raise ValueError("feature source is missing required quote columns")
@@ -152,7 +156,12 @@ def _aggregate_tables(tables: object, cfg: MultiHourConfig) -> list[dict[str, ob
                     "spread_bps": float(columns["spread_bps"][index]),
                     "tick_count": 0,
                     "quote_change_count": 0,
-                    "is_gap_start": bool(columns["is_gap_start"][index]),
+                    "underlying_observation_count": 0,
+                    "observed_seconds": 0,
+                    "maximum_quote_silence_seconds": 0.0,
+                    "scheduled_offline_overlap": None,
+                    "bar_complete": True,
+                    "is_gap_start": False,
                 }
             mid = float(columns["mid"][index])
             current["occurred_at"] = timestamp
@@ -166,9 +175,18 @@ def _aggregate_tables(tables: object, cfg: MultiHourConfig) -> list[dict[str, ob
             current["quote_change_count"] = int(current["quote_change_count"]) + int(
                 columns["quote_change_count"][index]
             )
-            current["is_gap_start"] = bool(current["is_gap_start"]) or bool(
-                columns["is_gap_start"][index]
+            current["underlying_observation_count"] = int(
+                current["underlying_observation_count"]
+            ) + 1
+            current["observed_seconds"] = int(current["observed_seconds"]) + 1
+            silence = columns["seconds_since_previous_active_bar"][index]
+            silence_seconds = float(silence) if silence is not None else 0.0
+            current["maximum_quote_silence_seconds"] = max(
+                float(current["maximum_quote_silence_seconds"]), silence_seconds
             )
+            if silence_seconds > cfg.maximum_open_quote_silence_seconds:
+                current["bar_complete"] = False
+                current["is_gap_start"] = True
     if current is not None:
         bars.append(current)
     return bars

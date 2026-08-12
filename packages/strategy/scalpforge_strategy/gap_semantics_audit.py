@@ -99,6 +99,7 @@ def run_gap_semantics_audit(
     holdout_start = _add_months(end, -cfg.sealed_holdout_months)
 
     multi_times = _timestamps(multi["occurred_at"])
+    multi_bucket_times = _timestamps(multi["bar_open_at"])
     multi_gaps = multi["is_gap_start"].to_pylist()
     multi_index = {value: index for index, value in enumerate(multi_times)}
     outcome_valid = outcomes[f"h{cfg.horizon_seconds}_valid"].to_pylist()
@@ -142,13 +143,14 @@ def run_gap_semantics_audit(
         else:
             first, last = mindex + 1, mindex + 1 + cfg.horizon_seconds // 300
             actual_discontinuity = any(
-                (multi_times[i] - multi_times[i - 1]).total_seconds() != 300
-                for i in range(first, min(last + 1, len(multi_times)))
+                (multi_bucket_times[i] - multi_bucket_times[i - 1]).total_seconds() != 300
+                for i in range(first, min(last + 1, len(multi_bucket_times)))
             )
             path_start = timestamp
             path_end = timestamp + timedelta(seconds=cfg.horizon_seconds + 300)
             missing_evidence = _missing_five_minute_evidence(
-                multi_times, raw_times, first, min(last + 1, len(multi_times)),
+                multi_bucket_times, raw_times, first,
+                min(last + 1, len(multi_bucket_times)),
                 calendar,
             )
             for evidence in missing_evidence:

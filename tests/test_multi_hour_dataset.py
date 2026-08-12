@@ -22,12 +22,13 @@ def _features(prices: list[float]) -> pa.Table:
             "tick_count": [10] * len(prices),
             "quote_change_count": [5] * len(prices),
             "is_gap_start": [False] * len(prices),
+            "seconds_since_previous_active_bar": [None] + [1] * (len(prices) - 1),
         }
     )
 
 
 def _config() -> MultiHourConfig:
-    return MultiHourConfig(300, (600, 900), (600, 900), 300, 600)
+    return MultiHourConfig(300, (600, 900), (600, 900), 300, 600, 60)
 
 
 def test_prior_boundary_excludes_current_bar() -> None:
@@ -46,10 +47,36 @@ def test_future_quote_cannot_change_prior_rows() -> None:
 
 
 def test_volatility_expansion_compares_normalized_windows() -> None:
-    config = MultiHourConfig(300, (600,), (600,), 600, 1200)
+    config = MultiHourConfig(300, (600,), (600,), 600, 1200, 60)
     prices = [100.0, 100.0, 100.0, 100.0, 102.0]
     rows = multi_hour_rows(_features(prices), config)
     assert rows[-1]["volatility_expansion_ratio"] > 1.0
+
+
+def test_short_quote_silence_is_provenance_not_a_broken_bar() -> None:
+    features = _features([100.0, 101.0])
+    features = features.set_column(
+        features.schema.get_field_index("seconds_since_previous_active_bar"),
+        "seconds_since_previous_active_bar",
+        pa.array([None, 7.0]),
+    )
+    rows = multi_hour_rows(features, _config())
+    assert rows[1]["maximum_quote_silence_seconds"] == 7.0
+    assert rows[1]["bar_complete"] is True
+    assert rows[1]["is_gap_start"] is False
+
+
+def test_long_open_quote_silence_breaks_bar_without_synthesis() -> None:
+    features = _features([100.0, 101.0])
+    features = features.set_column(
+        features.schema.get_field_index("seconds_since_previous_active_bar"),
+        "seconds_since_previous_active_bar",
+        pa.array([None, 61.0]),
+    )
+    rows = multi_hour_rows(features, _config())
+    assert rows[1]["underlying_observation_count"] == 1
+    assert rows[1]["bar_complete"] is False
+    assert rows[1]["is_gap_start"] is True
 
 
 def test_manifest_is_label_free_and_development_only(tmp_path) -> None:
