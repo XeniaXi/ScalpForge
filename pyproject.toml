@@ -34,6 +34,7 @@ scalpforge-build-gold-strategy-states = "scalpforge_strategy.gold_strategy_state
 scalpforge-build-gold-strategy-episodes = "scalpforge_strategy.gold_strategy_episodes_cli:main"
 scalpforge-run-gold-strategy-tournament = "scalpforge_strategy.gold_strategy_tournament_cli:main"
 scalpforge-audit-trend-candidate = "scalpforge_strategy.trend_candidate_audit_cli:main"
+scalpforge-audit-gap-semantics = "scalpforge_strategy.gap_semantics_audit_cli:main"
 scalpforge-build-outcomes = "scalpforge_strategy.outcomes_cli:main"
 scalpforge-run-baselines = "scalpforge_strategy.baselines_cli:main"
 scalpforge-build-structure = "scalpforge_strategy.structural_cli:main"
