@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 from dataclasses import dataclass
@@ -125,6 +126,46 @@ def load_session_calendar(path: Path) -> SessionCalendar:
         date.fromisoformat(payload["effective_to_exclusive"]), windows, closures,
         str(payload["source_url"]), str(payload["source_retrieved_at"]),
         str(payload["source_sha256"]), hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def load_jforex_offline_manifest(path: Path) -> SessionCalendar:
+    raw = path.read_bytes()
+    payload = json.loads(raw)
+    if payload.get("source") != "IDataService.getOfflineTimeDomains(from,to,instrument)":
+        raise ValueError("manifest is not an instrument-specific JForex offline export")
+    if payload.get("source_scope") != "instrument_specific_offline_domains":
+        raise ValueError("JForex manifest source scope is not instrument specific")
+    if payload.get("read_only") is not True or payload.get("external_non_executable") is not True:
+        raise ValueError("JForex offline artifact lacks required safety flags")
+    root = path.resolve().parent
+    csv_path = (root / str(payload["csv"])).resolve()
+    if not csv_path.is_relative_to(root):
+        raise ValueError("offline CSV escapes its manifest directory")
+    csv_bytes = csv_path.read_bytes()
+    digest = hashlib.sha256(csv_bytes).hexdigest()
+    if digest != payload.get("sha256"):
+        raise ValueError("JForex offline CSV checksum mismatch")
+    closures = []
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("instrument") != payload.get("instrument"):
+                raise ValueError("offline CSV instrument differs from manifest")
+            if row.get("scope") != "jforex_instrument_offline_domain":
+                raise ValueError("offline CSV contains an unsupported scope")
+            closures.append((_instant(row["start_utc"], UTC), _instant(row["end_utc"], UTC)))
+    if len(closures) != int(payload["interval_count"]):
+        raise ValueError("offline CSV row count differs from manifest")
+    start = _instant(str(payload["start_utc"]), UTC)
+    end = _instant(str(payload["end_utc_exclusive"]), UTC)
+    return SessionCalendar(
+        "jforex-offline-" + digest[:16], str(payload["instrument"]),
+        str(payload["venue"]), UTC, start.date(), end.date() + timedelta(days=1),
+        tuple(SessionWindow(day, time(0), time(0)) for day in range(7)),
+        tuple(closures),
+        "https://www.dukascopy.com/client/javadoc3/com/dukascopy/api/IDataService.html",
+        "captured_by_authenticated_jforex_strategy", digest,
+        hashlib.sha256(raw + csv_bytes).hexdigest(),
     )
 
 

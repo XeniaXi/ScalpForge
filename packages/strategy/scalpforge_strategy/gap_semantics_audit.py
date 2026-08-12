@@ -12,7 +12,11 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from .experiment_registry import register_experiment
 from .gold_strategy_tournament import _add_months, _next_month
-from .market_session_calendar import SessionCalendar, load_session_calendar
+from .market_session_calendar import (
+    SessionCalendar,
+    load_jforex_offline_manifest,
+    load_session_calendar,
+)
 from .trend_candidate_audit import _meta, _read, _timestamps
 
 
@@ -65,6 +69,7 @@ def run_gap_semantics_audit(
     output_root: Path,
     config: GapSemanticsConfig | None = None,
     session_calendar_path: Path | None = None,
+    jforex_offline_manifest: Path | None = None,
 ) -> GapSemanticsReport:
     cfg = config or GapSemanticsConfig()
     episode_meta, outcome_meta = _meta(episode_manifest), _meta(outcome_manifest)
@@ -73,7 +78,13 @@ def run_gap_semantics_audit(
     source_manifest = Path(str(multi_meta["source_feature_manifest"])).resolve()
     source_meta = _meta(source_manifest)
     _validate(episode_meta, outcome_meta, multi_meta, source_meta, cfg)
-    calendar = load_session_calendar(session_calendar_path) if session_calendar_path else None
+    if session_calendar_path and jforex_offline_manifest:
+        raise ValueError("provide either a session calendar or JForex offline manifest, not both")
+    calendar = (
+        load_jforex_offline_manifest(jforex_offline_manifest)
+        if jforex_offline_manifest
+        else load_session_calendar(session_calendar_path) if session_calendar_path else None
+    )
 
     episodes = _read(episode_manifest, episode_meta)
     outcomes = _read(outcome_manifest, outcome_meta)

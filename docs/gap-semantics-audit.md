@@ -34,3 +34,9 @@ classified as `scheduled_closed`, `unexpected_open_time_interruption`, or
 `calendar_out_of_effective_range`. The included example is intentionally invalid
 until its placeholder schedule and provenance are replaced and independently
 verified against the exact broker/server instrument.
+
+For Dukascopy datasets, prefer `--jforex-offline-manifest` with the authenticated
+`ScalpForgeMarketHoursExporter` manifest. The loader verifies the CSV SHA-256,
+instrument, row count, safety flags and source scope before using the exported
+offline domains. This avoids manually transcribing weekends, daily maintenance
+and holiday exceptions into a calendar.
