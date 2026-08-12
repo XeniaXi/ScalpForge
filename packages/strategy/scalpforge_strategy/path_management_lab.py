@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pyarrow as pa  # type: ignore[import-untyped]
 import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 from scalpforge_strategy.experiment_registry import register_experiment
@@ -290,7 +291,16 @@ def _episodes(manifest):
     path = Path(str(meta["feature_partition"])).resolve()
     if not path.is_relative_to(root):
         raise ValueError("episode partition escapes its dataset")
-    return meta, pq.read_table(path, columns=["episode_id", "occurred_at", "side"]).to_pylist()
+    table = pq.read_table(path, columns=["episode_id", "occurred_at", "side"])
+    timestamps = _utc_timestamps(table["occurred_at"])
+    episode_ids = table["episode_id"].to_pylist()
+    sides = table["side"].to_pylist()
+    return meta, [
+        {"episode_id": episode_id, "occurred_at": timestamp, "side": side}
+        for episode_id, timestamp, side in zip(
+            episode_ids, timestamps, sides, strict=True
+        )
+    ]
 
 
 def _quote_paths(manifest, meta, episodes, horizon):
@@ -306,8 +316,10 @@ def _quote_paths(manifest, meta, episodes, horizon):
         for batch in pq.ParquetFile(path).iter_batches(
             batch_size=100_000, columns=["occurred_at", "bid", "ask"]
         ):
-            for row in batch.to_pylist():
-                timestamp = row["occurred_at"].astimezone(UTC)
+            timestamps = _utc_timestamps(batch.column("occurred_at"))
+            bids = batch.column("bid").to_pylist()
+            asks = batch.column("ask").to_pylist()
+            for timestamp, bid, ask in zip(timestamps, bids, asks, strict=True):
                 while (
                     next_episode < len(ordered)
                     and ordered[next_episode]["occurred_at"] <= timestamp
@@ -324,9 +336,18 @@ def _quote_paths(manifest, meta, episodes, horizon):
                     delta = (timestamp - episode["occurred_at"]).total_seconds()
                     if 0 <= delta <= horizon + 30:
                         output[episode["episode_id"]].append(
-                            (timestamp, float(row["bid"]), float(row["ask"]))
+                            (timestamp, float(bid), float(ask))
                         )
     return output
+
+
+def _utc_timestamps(column):
+    unit = column.type.unit
+    divisor = {"s": 1, "ms": 1_000, "us": 1_000_000, "ns": 1_000_000_000}[unit]
+    return [
+        datetime.fromtimestamp(value / divisor, UTC)
+        for value in column.cast(pa.int64()).to_pylist()
+    ]
 
 
 def _mean(values):

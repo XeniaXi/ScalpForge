@@ -1,8 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
+import pyarrow as pa
 from scalpforge_strategy.path_management_lab import (
     PathManagementConfig,
     Policy,
+    _utc_timestamps,
     policies,
     simulate_path,
 )
@@ -55,3 +57,11 @@ def test_decision_latency_prevents_same_bar_entry() -> None:
     )
     assert result is not None
     assert result["entered_at"] == datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=1)
+
+
+def test_arrow_utc_conversion_does_not_require_timezone_database() -> None:
+    column = pa.array([0, 1_000_000], type=pa.timestamp("us", tz="UTC"))
+    assert _utc_timestamps(column) == [
+        datetime(1970, 1, 1, tzinfo=UTC),
+        datetime(1970, 1, 1, 0, 0, 1, tzinfo=UTC),
+    ]
