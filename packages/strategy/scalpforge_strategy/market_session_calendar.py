@@ -39,7 +39,7 @@ class SessionCalendar:
         if self._overlaps_explicit_closure(start_utc, end_utc):
             return "scheduled_closed"
         if self._fully_open(start_utc, end_utc):
-            return "unexpected_open_time_interruption"
+            return "expected_open_quote_silence"
         return "scheduled_closed"
 
     def _covers(self, value: datetime) -> bool:

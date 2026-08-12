@@ -38,7 +38,7 @@ def test_calendar_distinguishes_closure_from_open_time_outage(tmp_path) -> None:
     assert calendar.classify(
         datetime(2026, 1, 5, 14, 0, tzinfo=UTC),
         datetime(2026, 1, 5, 14, 1, tzinfo=UTC),
-    ) == "unexpected_open_time_interruption"
+    ) == "expected_open_quote_silence"
     assert calendar.classify(
         datetime(2026, 1, 10, 14, 0, tzinfo=UTC),
         datetime(2026, 1, 10, 14, 1, tzinfo=UTC),
@@ -81,4 +81,4 @@ def test_jforex_manifest_is_checksum_verified_and_classifies_offline(tmp_path) -
     assert calendar.classify(
         datetime(2026, 1, 5, 21, 30, tzinfo=UTC),
         datetime(2026, 1, 5, 21, 31, tzinfo=UTC),
-    ) == "unexpected_open_time_interruption"
+    ) == "expected_open_quote_silence"

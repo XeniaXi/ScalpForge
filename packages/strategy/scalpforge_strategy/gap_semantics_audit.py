@@ -29,7 +29,7 @@ class GapSemanticsConfig:
     stale_quote_seconds: int = 5
     short_interruption_seconds: int = 60
     diagnostic_thresholds_seconds: tuple[int, ...] = (30, 60, 120)
-    schema_revision: int = 2
+    schema_revision: int = 3
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,9 @@ class GapSemanticsReport:
     holdout_evaluated: bool
     rejected_candidate_count: int
     classification_counts: dict[str, int]
+    candidate_path_attribution_counts: dict[str, int]
+    missing_bar_evidence_counts: dict[str, int]
+    affected_candidates_by_month_and_direction: dict[str, int]
     gap_duration_bucket_counts: dict[str, int]
     interruption_metrics: dict[str, float | int | None]
     continuity_partition: str
@@ -102,7 +105,8 @@ def run_gap_semantics_audit(
     outcome_index = {value: index for index, value in enumerate(outcome_times)}
     episode_times = _timestamps(episodes["occurred_at"])
     families = episodes["family"].to_pylist()
-    rejected: list[datetime] = []
+    sides = episodes["side"].to_pylist()
+    rejected: list[tuple[datetime, int]] = []
     for index, timestamp in enumerate(episode_times):
         if not (development_start <= timestamp < holdout_start):
             continue
@@ -110,7 +114,7 @@ def run_gap_semantics_audit(
             continue
         oindex = outcome_index.get(timestamp)
         if oindex is not None and not outcome_valid[oindex]:
-            rejected.append(timestamp)
+            rejected.append((timestamp, int(sides[index])))
 
     raw = _read_development_source(source_manifest, source_meta, development_start, holdout_start)
     raw_times = _timestamps(raw["occurred_at"])
@@ -118,12 +122,20 @@ def run_gap_semantics_audit(
     bids, asks = raw["bid"].to_pylist(), raw["ask"].to_pylist()
 
     classifications: dict[str, int] = {}
+    path_attributions: dict[str, int] = {}
+    missing_bar_evidence: dict[str, int] = {}
+    affected_by_month_direction: dict[str, int] = {}
     buckets = {"gt_5_to_30s": 0, "gt_30_to_60s": 0, "gt_60_to_120s": 0, "gt_120s": 0}
     observed_durations: list[float] = []
     executable_boundaries = 0
     inspected_interruptions = 0
     interval_rows = _continuity_intervals(raw_times, raw_seconds, bids, asks, cfg, calendar)
-    for timestamp in rejected:
+    interval_starts = [row["gap_started_at"] for row in interval_rows]
+    for timestamp, side in rejected:
+        month_direction = f"{timestamp:%Y-%m}|{'long' if side > 0 else 'short'}"
+        affected_by_month_direction[month_direction] = (
+            affected_by_month_direction.get(month_direction, 0) + 1
+        )
         mindex = multi_index.get(timestamp)
         if mindex is None:
             classification = "missing_alignment"
@@ -135,6 +147,12 @@ def run_gap_semantics_audit(
             )
             path_start = timestamp
             path_end = timestamp + timedelta(seconds=cfg.horizon_seconds + 300)
+            missing_evidence = _missing_five_minute_evidence(
+                multi_times, raw_times, first, min(last + 1, len(multi_times)),
+                calendar,
+            )
+            for evidence in missing_evidence:
+                missing_bar_evidence[evidence] = missing_bar_evidence.get(evidence, 0) + 1
             raw_first = bisect_right(raw_times, path_start)
             raw_last = bisect_right(raw_times, path_end)
             gaps = [
@@ -164,9 +182,16 @@ def run_gap_semantics_audit(
                 actual_discontinuity, inherited, maximum,
                 cfg.short_interruption_seconds,
             )
+            path_states = _path_market_states(
+                interval_rows, interval_starts, path_start, path_end
+            )
+            attribution = _candidate_path_attribution(
+                missing_evidence, path_states, maximum, cfg.short_interruption_seconds
+            )
+            path_attributions[attribution] = path_attributions.get(attribution, 0) + 1
         classifications[classification] = classifications.get(classification, 0) + 1
 
-    short_only = classifications.get("short_quote_interruption_only", 0)
+    short_only = path_attributions.get("short_quote_silence_only", 0)
     recommendation = (
         "research_revised_continuity_rule_on_new_development_data"
         if rejected and short_only / len(rejected) >= 0.5
@@ -194,7 +219,8 @@ def run_gap_semantics_audit(
         str(outcome_meta["dataset_id"]), str(multi_meta["dataset_id"]),
         str(source_meta["dataset_id"]), "trend_continuation_1h_v1",
         development_start.isoformat(), holdout_start.isoformat(), holdout_start.isoformat(),
-        end.isoformat(), False, len(rejected), classifications, buckets,
+        end.isoformat(), False, len(rejected), classifications, path_attributions,
+        missing_bar_evidence, affected_by_month_direction, buckets,
         {
             "interruption_count": inspected_interruptions,
             "maximum_duration_seconds": max(observed_durations, default=None),
@@ -236,6 +262,58 @@ def _classify(
     if maximum <= short_seconds:
         return "short_quote_interruption_only"
     return "long_quote_interruption_or_closure_unknown"
+
+
+def _missing_five_minute_evidence(
+    multi_times, raw_times, first: int, last: int, calendar: SessionCalendar | None
+) -> list[str]:
+    evidence: list[str] = []
+    for index in range(first, last):
+        expected = multi_times[index - 1] + timedelta(seconds=300)
+        actual = multi_times[index]
+        while expected < actual:
+            bucket_end = expected + timedelta(seconds=300)
+            raw_first = bisect_right(raw_times, expected - timedelta(microseconds=1))
+            raw_last = bisect_right(raw_times, bucket_end - timedelta(microseconds=1))
+            if raw_last > raw_first:
+                evidence.append("aggregation_defect_underlying_observations_present")
+            elif calendar and calendar.classify(expected, bucket_end) == "scheduled_closed":
+                evidence.append("scheduled_offline_no_underlying_observations")
+            else:
+                evidence.append("open_market_no_underlying_observations")
+            expected = bucket_end
+    return evidence
+
+
+def _path_market_states(rows, starts, path_start: datetime, path_end: datetime) -> set[str]:
+    first = bisect_right(starts, path_start - timedelta(microseconds=1))
+    states: set[str] = set()
+    for row in rows[first:]:
+        if row["gap_started_at"] >= path_end:
+            break
+        if row["reopened_at"] > path_start:
+            states.add(str(row["market_state"]))
+    return states
+
+
+def _candidate_path_attribution(
+    missing_evidence: list[str], states: set[str], maximum: float, short_seconds: int
+) -> str:
+    labels: set[str] = set()
+    if "aggregation_defect_underlying_observations_present" in missing_evidence:
+        labels.add("aggregation_defect")
+    if "scheduled_offline_no_underlying_observations" in missing_evidence \
+            or "scheduled_closed" in states:
+        labels.add("scheduled_offline_path")
+    if "open_market_no_underlying_observations" in missing_evidence:
+        labels.add("open_market_missing_5m_bar")
+    if maximum > short_seconds:
+        labels.add("long_open_market_silence")
+    elif maximum > 0:
+        labels.add("short_quote_silence_only")
+    if not labels:
+        return "invalid_without_identified_path_evidence"
+    return next(iter(labels)) if len(labels) == 1 else "mixed_path"
 
 
 def _continuity_intervals(times, seconds, bids, asks, cfg, calendar=None):

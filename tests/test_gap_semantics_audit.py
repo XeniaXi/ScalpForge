@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from scalpforge_strategy.gap_semantics_audit import (
     GapSemanticsConfig,
+    _candidate_path_attribution,
     _classify,
     _continuity_intervals,
     _median,
@@ -20,6 +21,20 @@ def test_gap_median() -> None:
     assert _median([]) is None
     assert _median([8, 6, 10]) == 8
     assert _median([6, 8]) == 7
+
+
+def test_candidate_path_attribution_keeps_causes_separate() -> None:
+    assert _candidate_path_attribution([], {"expected_open_quote_silence"}, 12, 60) \
+        == "short_quote_silence_only"
+    assert _candidate_path_attribution(
+        ["open_market_no_underlying_observations"], set(), 0, 60
+    ) == "open_market_missing_5m_bar"
+    assert _candidate_path_attribution(
+        ["aggregation_defect_underlying_observations_present"], set(), 0, 60
+    ) == "aggregation_defect"
+    assert _candidate_path_attribution(
+        ["open_market_no_underlying_observations"], {"scheduled_closed"}, 70, 60
+    ) == "mixed_path"
 
 
 def test_continuity_interval_preserves_executable_boundaries() -> None:
