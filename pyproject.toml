@@ -37,6 +37,7 @@ scalpforge-build-session-episodes = "scalpforge_strategy.session_episodes_cli:ma
 scalpforge-run-abstention-lab = "scalpforge_strategy.abstention_lab_cli:main"
 scalpforge-run-path-management-lab = "scalpforge_strategy.path_management_lab_cli:main"
 scalpforge-run-regime-gate-lab = "scalpforge_strategy.regime_gate_lab_cli:main"
+scalpforge-run-shock-resiliency-lab = "scalpforge_strategy.shock_resiliency_lab_cli:main"
 scalpforge-run-structural-lab = "scalpforge_strategy.structural_lab_cli:main"
 scalpforge-run-sequence-lab = "scalpforge_strategy.sequence_lab_cli:main"
 scalpforge-run-quote-pressure-lab = "scalpforge_strategy.quote_pressure_lab_cli:main"
@@ -46,6 +47,7 @@ scalpforge-backtest = "scalpforge_backtest.cli:main"
 scalpforge-compare-feeds = "scalpforge_broker.cli:main"
 scalpforge-collect = "scalpforge_collector.cli:main"
 scalpforge-ingest-news = "scalpforge_news.cli:main"
+scalpforge-import-macro-events = "scalpforge_news.macro_calendar_cli:main"
 scalpforge-quality = "scalpforge_quality.cli:main"
 
 [tool.hatch.build.targets.wheel]
