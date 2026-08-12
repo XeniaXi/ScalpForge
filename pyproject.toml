@@ -32,6 +32,7 @@ scalpforge-build-multi-hour-features = "scalpforge_strategy.multi_hour_dataset_c
 scalpforge-build-multi-hour-outcomes = "scalpforge_strategy.multi_hour_outcomes_cli:main"
 scalpforge-build-gold-strategy-states = "scalpforge_strategy.gold_strategy_states_cli:main"
 scalpforge-build-gold-strategy-episodes = "scalpforge_strategy.gold_strategy_episodes_cli:main"
+scalpforge-run-gold-strategy-tournament = "scalpforge_strategy.gold_strategy_tournament_cli:main"
 scalpforge-build-outcomes = "scalpforge_strategy.outcomes_cli:main"
 scalpforge-run-baselines = "scalpforge_strategy.baselines_cli:main"
 scalpforge-build-structure = "scalpforge_strategy.structural_cli:main"
