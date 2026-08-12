@@ -3,6 +3,14 @@
 `ScalpForgeHistoricalExporter.java` retrieves paired best bid/ask `ITick` history through
 `IHistory.getTicks`. It never obtains `IEngine` and contains no order operation.
 
+`ScalpForgeMarketHoursExporter.java` separately exports instrument-specific offline
+domains using `IDataService.getOfflineTimeDomains(from, to, instrument)`. Its default
+range covers Candidate A development data from 2025-11-01 through 2026-05-01 UTC.
+The CSV and SHA-256 manifest are written beneath
+`Strategies\files\ScalpForgeMarketHours`. Optional observer mode records future
+`IInstrumentStatusMessage` tradability changes; it cannot reconstruct past status
+messages and is disabled by default.
+
 ## Installation
 
 In JForex, open **Settings > Preferences** and note the Strategies path. Install the source using

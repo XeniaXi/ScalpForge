@@ -19,3 +19,14 @@ def test_jforex_exporter_has_no_execution_surface() -> None:
     assert "IHistory" in source
     assert "getTicks(" in source
     assert "external_non_executable" in source
+
+
+def test_jforex_market_hours_exporter_has_no_execution_surface() -> None:
+    source = Path("jforex/Strategies/ScalpForgeMarketHoursExporter.java").read_text(
+        encoding="utf-8"
+    )
+    forbidden = ("IEngine", "submitOrder", "OrderCommand", "getEngine(")
+    assert not any(token in source for token in forbidden)
+    assert "getOfflineTimeDomains(start, end, instrument)" in source
+    assert "IInstrumentStatusMessage" in source
+    assert "external_non_executable" in source
