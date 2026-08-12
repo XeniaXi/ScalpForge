@@ -58,3 +58,21 @@ provider will remain profitable and never enables real-money execution.
 
 Before paper shadowing, manually verify live-account status, deposits/withdrawals, floating
 drawdown, platform regulation, Nigerian eligibility, and whether the provider permits copying.
+
+## Cash-flow and episode-aware lab
+
+Run this against each original, unmerged MQL5 export. It retains deposits and withdrawals for
+closed-balance reconstruction and joins overlapping tickets with the same symbol and direction
+into one risk episode:
+
+```powershell
+.\.venv\Scripts\scalpforge-run-copy-episode-lab.exe `
+  C:\ScalpForge\data\raw\copy-traders\provider-detailed.csv `
+  --provider-id provider-detailed `
+  --source-utc-offset-hours 2 `
+  --output-root C:\ScalpForge\outputs\copy-trader-episode-audits
+```
+
+Its drawdown remains a closed-balance statistic. MQL5 trade-history exports do not reveal the
+worst floating equity while positions were open, so the lab never grants paper eligibility by
+itself and cannot authorize live execution.
