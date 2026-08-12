@@ -206,7 +206,11 @@ def _derive_rows(bars: list[dict[str, object]], cfg: MultiHourConfig) -> list[di
         long_vol = _volatility(_window(history, timestamp, cfg.long_volatility_seconds) + [bar])
         row["realized_volatility_short_bps"] = short_vol
         row["realized_volatility_long_bps"] = long_vol
-        row["volatility_expansion_ratio"] = short_vol / long_vol if long_vol else None
+        row["volatility_expansion_ratio"] = (
+            short_vol / long_vol
+            if short_vol is not None and long_vol not in (None, 0.0)
+            else None
+        )
         row["session"] = _session(timestamp)
         rows.append(row)
         history.append(bar)
