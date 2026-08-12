@@ -13,12 +13,12 @@ import pyarrow.parquet as pq  # type: ignore[import-untyped]
 
 @dataclass(frozen=True)
 class SessionEpisodeConfig:
-    schema_revision: int = 1
+    schema_revision: int = 2
     label_horizon_seconds: int = 300
     maximum_spread_bps: float = 4.0
 
     def __post_init__(self) -> None:
-        if self.schema_revision != 1 or self.label_horizon_seconds != 300:
+        if self.schema_revision != 2 or self.label_horizon_seconds != 300:
             raise ValueError("only preregistered 300-second session episodes are supported")
         if self.maximum_spread_bps <= 0:
             raise ValueError("maximum spread must be positive")
@@ -89,6 +89,7 @@ def write_session_episode_dataset(
     label_rows: list[dict[str, object]] = []
     windows = [item["name"] for item in session_meta["session_config"]["windows"]]
     previous_sides = {window: 0 for window in windows}
+    emitted_windows: set[str] = set()
     current_day: str | None = None
     try:
         for features, sessions, structure, outcomes in _aligned_batches(
@@ -111,9 +112,14 @@ def write_session_episode_dataset(
                 if day != current_day:
                     current_day = day
                     previous_sides = {window: 0 for window in windows}
+                    emitted_windows = set()
                 for window in windows:
                     side = int(sessions[f"{window}_breakout_side"][index].as_py() or 0)
-                    episode_start = side != 0 and previous_sides[window] == 0
+                    episode_start = (
+                        side != 0
+                        and previous_sides[window] == 0
+                        and window not in emitted_windows
+                    )
                     previous_sides[window] = side
                     if not episode_start:
                         continue
@@ -148,6 +154,7 @@ def write_session_episode_dataset(
                             cfg.label_horizon_seconds,
                         )
                     )
+                    emitted_windows.add(window)
         if not feature_rows:
             raise ValueError("no eligible session episodes were found")
         feature_table = pa.Table.from_pylist(feature_rows, schema=_feature_schema())
