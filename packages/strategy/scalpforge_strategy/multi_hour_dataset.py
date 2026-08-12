@@ -20,6 +20,7 @@ class MultiHourConfig:
     level_windows_seconds: tuple[int, ...] = (14400, 28800, 43200)
     short_volatility_seconds: int = 1800
     long_volatility_seconds: int = 7200
+    schema_revision: int = 2
 
     def __post_init__(self) -> None:
         if self.decision_bar_seconds <= 0:
@@ -141,6 +142,8 @@ def _aggregate_tables(tables: object, cfg: MultiHourConfig) -> list[dict[str, ob
                     "occurred_at": timestamp,
                     "feature_available_at": bucket_at + timedelta(seconds=cfg.decision_bar_seconds),
                     "bar_open": mid,
+                    "bar_open_bid": float(columns["bid"][index]),
+                    "bar_open_ask": float(columns["ask"][index]),
                     "bar_high": mid,
                     "bar_low": mid,
                     "bar_close": mid,
@@ -207,9 +210,7 @@ def _derive_rows(bars: list[dict[str, object]], cfg: MultiHourConfig) -> list[di
         row["realized_volatility_short_bps"] = short_vol
         row["realized_volatility_long_bps"] = long_vol
         row["volatility_expansion_ratio"] = (
-            short_vol / long_vol
-            if short_vol is not None and long_vol not in (None, 0.0)
-            else None
+            short_vol / long_vol if short_vol is not None and long_vol not in (None, 0.0) else None
         )
         row["session"] = _session(timestamp)
         rows.append(row)
@@ -228,9 +229,7 @@ def _efficiency(values: list[dict[str, object]]) -> float | None:
     closes = [float(item["bar_close"]) for item in values]
     if len(closes) < 2:
         return None
-    distance = sum(
-        abs(closes[index] - closes[index - 1]) for index in range(1, len(closes))
-    )
+    distance = sum(abs(closes[index] - closes[index - 1]) for index in range(1, len(closes)))
     return abs(closes[-1] - closes[0]) / distance if distance else 0.0
 
 
@@ -238,10 +237,7 @@ def _volatility(values: list[dict[str, object]]) -> float | None:
     closes = [float(item["bar_close"]) for item in values]
     if len(closes) < 2:
         return None
-    returns = [
-        (closes[index] / closes[index - 1] - 1) * 10_000
-        for index in range(1, len(closes))
-    ]
+    returns = [(closes[index] / closes[index - 1] - 1) * 10_000 for index in range(1, len(closes))]
     return math.sqrt(sum(value * value for value in returns))
 
 

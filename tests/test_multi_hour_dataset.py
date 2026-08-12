@@ -33,6 +33,8 @@ def _config() -> MultiHourConfig:
 def test_prior_boundary_excludes_current_bar() -> None:
     rows = multi_hour_rows(_features([100.0, 101.0, 105.0]), _config())
     assert rows[0]["volatility_expansion_ratio"] is None
+    assert rows[0]["bar_open_bid"] == 99.9
+    assert rows[0]["bar_open_ask"] == 100.1
     assert rows[2]["prior_high_600s"] == 101.0
     assert rows[2]["breakout_side_600s"] == 1
 
