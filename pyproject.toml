@@ -36,6 +36,7 @@ scalpforge-run-session-strategy-lab = "scalpforge_strategy.session_strategy_lab_
 scalpforge-build-session-episodes = "scalpforge_strategy.session_episodes_cli:main"
 scalpforge-run-abstention-lab = "scalpforge_strategy.abstention_lab_cli:main"
 scalpforge-run-path-management-lab = "scalpforge_strategy.path_management_lab_cli:main"
+scalpforge-run-regime-gate-lab = "scalpforge_strategy.regime_gate_lab_cli:main"
 scalpforge-run-structural-lab = "scalpforge_strategy.structural_lab_cli:main"
 scalpforge-run-sequence-lab = "scalpforge_strategy.sequence_lab_cli:main"
 scalpforge-run-quote-pressure-lab = "scalpforge_strategy.quote_pressure_lab_cli:main"
