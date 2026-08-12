@@ -11,6 +11,18 @@ seconds), actual five-minute discontinuities, and whether valid bid/ask quotes
 bracket each interruption. It never evaluates P&L, changes the frozen candidate,
 rebuilds labels, or reads the sealed holdout.
 
+Revision 2 also writes `continuity_intervals.parquet`. Each row preserves the
+last observed pre-gap quote, first observed post-gap quote, duration, spread
+change, midpoint jump, quote validity and an explicit prohibition on synthetic
+fills. Interruptions up to 60 seconds are classified as short for operational
+research, with 30/60/120-second thresholds retained only as return-blind
+diagnostics.
+
+The source data currently lacks an effective-dated broker XAU session calendar,
+separate bid/ask update flags, receive timestamps and source sequences. Therefore
+the artifact honestly labels market state as unknown; it does not infer that a
+long silence was a scheduled closure.
+
 The report's recommendation is a research decision only. Any revised continuity
 rule must be frozen and tested on new development or prospective data rather than
 chosen from Candidate A returns.

@@ -21,9 +21,10 @@ class GapSemanticsConfig:
     horizon_seconds: int = 3600
     warmup_months: int = 3
     sealed_holdout_months: int = 3
-    short_gap_max_seconds: int = 30
-    medium_gap_max_seconds: int = 300
-    schema_revision: int = 1
+    stale_quote_seconds: int = 5
+    short_interruption_seconds: int = 60
+    diagnostic_thresholds_seconds: tuple[int, ...] = (30, 60, 120)
+    schema_revision: int = 2
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,9 @@ class GapSemanticsReport:
     classification_counts: dict[str, int]
     gap_duration_bucket_counts: dict[str, int]
     interruption_metrics: dict[str, float | int | None]
+    continuity_partition: str
+    continuity_columns: list[str]
+    limitations: list[str]
     recommendation: str
     automatic_rule_change_applied: bool = False
     candidate_frozen: bool = True
@@ -98,10 +102,11 @@ def run_gap_semantics_audit(
     bids, asks = raw["bid"].to_pylist(), raw["ask"].to_pylist()
 
     classifications: dict[str, int] = {}
-    buckets = {"gt_5_to_30s": 0, "gt_30_to_300s": 0, "gt_300s": 0}
+    buckets = {"gt_5_to_30s": 0, "gt_30_to_60s": 0, "gt_60_to_120s": 0, "gt_120s": 0}
     observed_durations: list[float] = []
     executable_boundaries = 0
     inspected_interruptions = 0
+    interval_rows = _continuity_intervals(raw_times, raw_seconds, bids, asks, cfg)
     for timestamp in rejected:
         mindex = multi_index.get(timestamp)
         if mindex is None:
@@ -124,12 +129,14 @@ def run_gap_semantics_audit(
             for i, duration in gaps:
                 inspected_interruptions += 1
                 observed_durations.append(duration)
-                if duration <= cfg.short_gap_max_seconds:
+                if duration <= 30:
                     buckets["gt_5_to_30s"] += 1
-                elif duration <= cfg.medium_gap_max_seconds:
-                    buckets["gt_30_to_300s"] += 1
+                elif duration <= 60:
+                    buckets["gt_30_to_60s"] += 1
+                elif duration <= 120:
+                    buckets["gt_60_to_120s"] += 1
                 else:
-                    buckets["gt_300s"] += 1
+                    buckets["gt_120s"] += 1
                 if i > 0 and bids[i - 1] is not None and asks[i - 1] is not None \
                         and bids[i] is not None and asks[i] is not None \
                         and float(asks[i - 1]) >= float(bids[i - 1]) \
@@ -137,10 +144,13 @@ def run_gap_semantics_audit(
                     executable_boundaries += 1
             maximum = max((duration for _, duration in gaps), default=0.0)
             inherited = any(multi_gaps[i] for i in range(first, min(last + 1, len(multi_gaps))))
-            classification = _classify(actual_discontinuity, inherited, maximum)
+            classification = _classify(
+                actual_discontinuity, inherited, maximum,
+                cfg.short_interruption_seconds,
+            )
         classifications[classification] = classifications.get(classification, 0) + 1
 
-    short_only = classifications.get("short_intraday_interruption_only", 0)
+    short_only = classifications.get("short_quote_interruption_only", 0)
     recommendation = (
         "research_revised_continuity_rule_on_new_development_data"
         if rejected and short_only / len(rejected) >= 0.5
@@ -153,6 +163,12 @@ def run_gap_semantics_audit(
     report_id = "gap-semantics-audit-" + hashlib.sha256(
         json.dumps(payload, sort_keys=True).encode()
     ).hexdigest()[:16]
+    root = output_root / report_id
+    root.mkdir(parents=True, exist_ok=True)
+    continuity_path = root / "continuity_intervals.parquet"
+    continuity_columns = list(interval_rows[0]) if interval_rows else _continuity_columns()
+    continuity_table = pa.Table.from_pylist(interval_rows, schema=_continuity_schema())
+    pq.write_table(continuity_table, continuity_path)
     report = GapSemanticsReport(
         report_id, 1, datetime.now(UTC).isoformat(), str(episode_meta["dataset_id"]),
         str(outcome_meta["dataset_id"]), str(multi_meta["dataset_id"]),
@@ -166,10 +182,15 @@ def run_gap_semantics_audit(
             "executable_quote_boundary_ratio": (
                 executable_boundaries / inspected_interruptions if inspected_interruptions else None
             ),
-        }, recommendation,
+        }, str(continuity_path.resolve()), continuity_columns,
+        [
+            "broker-specific effective-dated XAU session calendar is unavailable",
+            "interruptions cannot yet be labeled scheduled closure versus feed outage",
+            "source rows do not expose separate bid/ask update ages or receive timestamps",
+            "executable boundary means valid observed two-sided quote, not guaranteed fill",
+            "diagnostic 30/60/120-second thresholds must not be ranked by strategy returns",
+        ], recommendation,
     )
-    root = output_root / report_id
-    root.mkdir(parents=True, exist_ok=True)
     (root / "report.json").write_text(json.dumps(asdict(report), indent=2) + "\n", encoding="utf-8")
     register_experiment(
         output_root / "experiment-registry.jsonl", report_id=report_id,
@@ -180,16 +201,90 @@ def run_gap_semantics_audit(
     return report
 
 
-def _classify(discontinuity: bool, inherited: bool, maximum: float) -> str:
+def _classify(
+    discontinuity: bool, inherited: bool, maximum: float, short_seconds: int = 60
+) -> str:
     if discontinuity:
         return "five_minute_bar_discontinuity"
     if not inherited:
         return "outcome_invalid_without_continuity_evidence"
-    if maximum <= 30:
-        return "short_intraday_interruption_only"
-    if maximum <= 300:
-        return "medium_intraday_interruption"
-    return "long_gap_or_closure"
+    if maximum <= short_seconds:
+        return "short_quote_interruption_only"
+    return "long_quote_interruption_or_closure_unknown"
+
+
+def _continuity_intervals(times, seconds, bids, asks, cfg):
+    rows = []
+    for index in range(1, len(times)):
+        if seconds[index] is None or float(seconds[index]) <= cfg.stale_quote_seconds:
+            continue
+        duration = float(seconds[index])
+        pre_bid, pre_ask = _number(bids[index - 1]), _number(asks[index - 1])
+        post_bid, post_ask = _number(bids[index]), _number(asks[index])
+        valid_pre = _valid_quote(pre_bid, pre_ask)
+        valid_post = _valid_quote(post_bid, post_ask)
+        pre_mid = (pre_bid + pre_ask) / 2 if valid_pre else None
+        post_mid = (post_bid + post_ask) / 2 if valid_post else None
+        rows.append({
+            "gap_started_at": times[index - 1],
+            "reopened_at": times[index],
+            "gap_seconds": duration,
+            "interruption_class": (
+                "short_quote_interruption"
+                if duration <= cfg.short_interruption_seconds
+                else "long_quote_interruption"
+            ),
+            "market_state": "unknown_calendar_unavailable",
+            "pre_gap_bid": pre_bid,
+            "pre_gap_ask": pre_ask,
+            "post_gap_bid": post_bid,
+            "post_gap_ask": post_ask,
+            "pre_gap_spread_bps": _spread_bps(pre_bid, pre_ask),
+            "post_gap_spread_bps": _spread_bps(post_bid, post_ask),
+            "mid_jump_bps": (
+                (post_mid / pre_mid - 1) * 10_000 if pre_mid and post_mid else None
+            ),
+            "valid_pre_gap_quote": valid_pre,
+            "valid_post_gap_quote": valid_post,
+            "synthetic_fill_permitted": False,
+            "source_sequence_status": "unavailable",
+        })
+    return rows
+
+
+def _continuity_columns():
+    return [field.name for field in _continuity_schema()]
+
+
+def _continuity_schema():
+    return pa.schema([
+        ("gap_started_at", pa.timestamp("us", tz="UTC")),
+        ("reopened_at", pa.timestamp("us", tz="UTC")),
+        ("gap_seconds", pa.float64()),
+        ("interruption_class", pa.string()),
+        ("market_state", pa.string()),
+        ("pre_gap_bid", pa.float64()), ("pre_gap_ask", pa.float64()),
+        ("post_gap_bid", pa.float64()), ("post_gap_ask", pa.float64()),
+        ("pre_gap_spread_bps", pa.float64()),
+        ("post_gap_spread_bps", pa.float64()),
+        ("mid_jump_bps", pa.float64()),
+        ("valid_pre_gap_quote", pa.bool_()),
+        ("valid_post_gap_quote", pa.bool_()),
+        ("synthetic_fill_permitted", pa.bool_()),
+        ("source_sequence_status", pa.string()),
+    ])
+
+
+def _number(value):
+    return float(value) if value is not None else None
+
+
+def _valid_quote(bid, ask):
+    return bid is not None and ask is not None and bid > 0 and ask >= bid
+
+
+def _spread_bps(bid, ask):
+    return (ask - bid) / ((ask + bid) / 2) * 10_000 if _valid_quote(bid, ask) else None
 
 
 def _read_development_source(manifest, meta, start, end):
