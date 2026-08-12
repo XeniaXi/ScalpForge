@@ -45,6 +45,13 @@ def test_future_quote_cannot_change_prior_rows() -> None:
     assert before == after[:2]
 
 
+def test_volatility_expansion_compares_normalized_windows() -> None:
+    config = MultiHourConfig(300, (600,), (600,), 600, 1200)
+    prices = [100.0, 100.0, 100.0, 100.0, 102.0]
+    rows = multi_hour_rows(_features(prices), config)
+    assert rows[-1]["volatility_expansion_ratio"] > 1.0
+
+
 def test_manifest_is_label_free_and_development_only(tmp_path) -> None:
     source = tmp_path / "source"
     source.mkdir()

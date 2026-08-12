@@ -20,7 +20,7 @@ class MultiHourConfig:
     level_windows_seconds: tuple[int, ...] = (14400, 28800, 43200)
     short_volatility_seconds: int = 1800
     long_volatility_seconds: int = 7200
-    schema_revision: int = 2
+    schema_revision: int = 3
 
     def __post_init__(self) -> None:
         if self.decision_bar_seconds <= 0:
@@ -176,7 +176,11 @@ def _aggregate_tables(tables: object, cfg: MultiHourConfig) -> list[dict[str, ob
 
 def _derive_rows(bars: list[dict[str, object]], cfg: MultiHourConfig) -> list[dict[str, object]]:
     history: deque[dict[str, object]] = deque()
-    maximum = max(cfg.return_windows_seconds + cfg.level_windows_seconds)
+    maximum = max(
+        cfg.return_windows_seconds
+        + cfg.level_windows_seconds
+        + (cfg.short_volatility_seconds, cfg.long_volatility_seconds)
+    )
     rows: list[dict[str, object]] = []
     for bar in bars:
         timestamp = bar["bar_open_at"]
@@ -238,7 +242,11 @@ def _volatility(values: list[dict[str, object]]) -> float | None:
     if len(closes) < 2:
         return None
     returns = [(closes[index] / closes[index - 1] - 1) * 10_000 for index in range(1, len(closes))]
-    return math.sqrt(sum(value * value for value in returns))
+    # Normalize by observation count so windows of different lengths are
+    # comparable.  The previous root-sum-of-squares definition made the long
+    # window structurally dominate its nested short window, preventing a true
+    # volatility-expansion ratio from exceeding one in ordinary data.
+    return math.sqrt(sum(value * value for value in returns) / len(returns))
 
 
 def _read_tables(manifest: Path, meta: dict[str, object]):
