@@ -15,6 +15,7 @@ class RawTrade:
     side: str
     volume: float
     net_profit: float
+    entry_price: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,7 @@ def read_mql5_account(
                     net_profit=_number(row[profit_index])
                     + _number(row[commission_index])
                     + _number(row[swap_index]),
+                    entry_price=_number(row[4]),
                 )
             )
     if not trades:

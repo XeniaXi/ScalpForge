@@ -76,3 +76,21 @@ into one risk episode:
 Its drawdown remains a closed-balance statistic. MQL5 trade-history exports do not reveal the
 worst floating equity while positions were open, so the lab never grants paper eligibility by
 itself and cannot authorize live execution.
+
+## Provider path reconstruction
+
+Where provider dates overlap a curated XAUUSD quote dataset, reconstruct executable paths and
+estimate MAE/MFE, quick exits, runners and worse-price additions. Cross-venue price mismatch and
+incomplete date coverage are always reported:
+
+```powershell
+.\.venv\Scripts\scalpforge-run-provider-path-lab.exe `
+  C:\ScalpForge\data\raw\copy-traders\provider-detailed.csv `
+  --quote-manifest C:\ScalpForge\data\curated\external\xauusd-jforex-ID\manifest.json `
+  --provider-id provider-detailed `
+  --source-utc-offset-hours 2 `
+  --output-root C:\ScalpForge\outputs\provider-path-lab
+```
+
+This is descriptive hypothesis evidence, not an executable strategy or proof that the provider's
+fills could have been achieved on the JForex feed.
