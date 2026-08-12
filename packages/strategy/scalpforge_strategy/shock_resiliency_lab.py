@@ -182,7 +182,12 @@ def _test_shocks(fm, fmeta, om, ometa, folds, thresholds, cfg):
             ):
                 continue
             last_episode[fold.fold] = timestamp
-            row = {name: features[name][index].as_py() for name in features.column_names}
+            row = {
+                name: features[name][index].as_py()
+                for name in features.column_names
+                if name != "occurred_at"
+            }
+            row["occurred_at"] = timestamp
             shock_side = 1 if float(value) > 0 else -1
             classification = classify_shock(row, cfg)
             directions = {
