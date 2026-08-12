@@ -19,6 +19,22 @@ research journal.
 
 ## Run
 
+For an MQL5 semicolon export, normalize it first. Confirm the displayed history's server-time
+offset before running; do not guess it when event timing matters:
+
+```powershell
+.\.venv\Scripts\scalpforge-normalize-mql5-history.exe `
+  C:\ScalpForge\data\raw\copy-traders\mql5-export.csv `
+  --output C:\ScalpForge\data\normalized\copy-traders\provider-123.csv `
+  --provider-id provider-123 `
+  --source-utc-offset-hours 2
+```
+
+The converter handles MQL5's duplicate `Time` and `Volume` headers, excludes balance rows, and
+adds listed commission and swap to profit. Keep the original export for provenance.
+
+Then audit the normalized history:
+
 ```powershell
 .\.venv\Scripts\scalpforge-audit-copy-trader.exe `
   C:\ScalpForge\data\raw\copy-traders\provider-123.csv `

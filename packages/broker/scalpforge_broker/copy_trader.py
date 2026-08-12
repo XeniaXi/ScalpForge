@@ -3,7 +3,7 @@ import hashlib
 import json
 import statistics
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 REQUIRED_COLUMNS = {
@@ -79,6 +79,101 @@ def read_copy_trades(path: Path) -> list[CopyTrade]:
     if len(provider_ids) != 1 or "" in provider_ids:
         raise ValueError("one non-empty provider_id is required per audit")
     return sorted(trades, key=lambda trade: (trade.closed_at, trade.opened_at))
+
+
+def normalize_mql5_history(
+    source: Path,
+    destination: Path,
+    *,
+    provider_id: str,
+    source_utc_offset_hours: float,
+) -> dict[str, object]:
+    """Convert MQL5's duplicate-header semicolon export into the audit contract."""
+    if not provider_id.strip():
+        raise ValueError("provider_id cannot be empty")
+    offset = timezone(timedelta(hours=source_utc_offset_hours))
+    normalized: list[dict[str, object]] = []
+    skipped_balance_rows = 0
+    with source.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.reader(handle, delimiter=";")
+        header = next(reader, None)
+        compact_header = [
+            "Time",
+            "Type",
+            "Volume",
+            "Symbol",
+            "Price",
+            "Volume",
+            "Time",
+            "Price",
+            "Commission",
+            "Swap",
+            "Profit",
+        ]
+        detailed_header = [
+            "Time",
+            "Type",
+            "Volume",
+            "Symbol",
+            "Price",
+            "S/L",
+            "T/P",
+            "Time",
+            "Price",
+            "Commission",
+            "Swap",
+            "Profit",
+            "Comment",
+        ]
+        if header not in (compact_header, detailed_header):
+            raise ValueError("unsupported MQL5 history header")
+        detailed = header == detailed_header
+        for number, row in enumerate(reader, start=2):
+            if len(row) != len(header):
+                raise ValueError(f"row {number}: expected {len(header)} columns")
+            side = row[1].strip().lower()
+            if side not in {"buy", "sell"}:
+                skipped_balance_rows += 1
+                continue
+            close_index = 7 if detailed else 6
+            commission_index = 9 if detailed else 8
+            swap_index = 10 if detailed else 9
+            profit_index = 11 if detailed else 10
+            opened = datetime.strptime(row[0], "%Y.%m.%d %H:%M:%S").replace(tzinfo=offset)
+            closed = datetime.strptime(row[close_index], "%Y.%m.%d %H:%M:%S").replace(
+                tzinfo=offset
+            )
+            number_value = lambda value: float(value.replace(" ", "") or 0)  # noqa: E731
+            commission = number_value(row[commission_index])
+            swap = number_value(row[swap_index])
+            profit = number_value(row[profit_index])
+            normalized.append(
+                {
+                    "provider_id": provider_id.strip(),
+                    "opened_at": opened.astimezone(UTC).isoformat(),
+                    "closed_at": closed.astimezone(UTC).isoformat(),
+                    "symbol": row[3].strip().upper(),
+                    "side": side,
+                    "volume": number_value(row[2]),
+                    "net_profit": profit + commission + swap,
+                }
+            )
+    if not normalized:
+        raise ValueError("MQL5 export contains no closed buy/sell trades")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with destination.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=sorted(REQUIRED_COLUMNS))
+        writer.writeheader()
+        writer.writerows(normalized)
+    return {
+        "source_file": source.name,
+        "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "destination": str(destination),
+        "closed_trades": len(normalized),
+        "skipped_non_trade_rows": skipped_balance_rows,
+        "source_utc_offset_hours": source_utc_offset_hours,
+        "commission_and_swap_included": True,
+    }
 
 
 def _maximum_drawdown(pnls: list[float], starting_equity: float) -> tuple[float, float]:
