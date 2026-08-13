@@ -1,5 +1,5 @@
 #property strict
-#property version   "1.10"
+#property version   "1.20"
 #property description "Read-only ScalpForge demo quote recorder. Never sends orders."
 
 input string OutputPrefix = "scalpforge";
@@ -106,15 +106,20 @@ void WriteSymbolSpecification()
    FileWrite(handle, "captured_utc", "broker", "server", "symbol", "digits", "point",
              "contract_size", "min_lot", "max_lot", "lot_step", "tick_size", "tick_value",
              "stop_level_points", "freeze_level_points", "swap_long", "swap_short",
-             "margin_required", "trade_allowed");
+             "swap_type", "profit_calculation_mode", "margin_calculation_mode",
+             "margin_required", "trade_allowed", "current_spread_points", "account_currency",
+             "commission_status", "triple_swap_weekday_status");
    FileWrite(handle, UtcNow(), CsvSafe(AccountCompany()), CsvSafe(AccountServer()), Symbol(),
              Digits, DoubleToString(Point, Digits), MarketInfo(Symbol(), MODE_LOTSIZE),
              MarketInfo(Symbol(), MODE_MINLOT), MarketInfo(Symbol(), MODE_MAXLOT),
              MarketInfo(Symbol(), MODE_LOTSTEP), MarketInfo(Symbol(), MODE_TICKSIZE),
              MarketInfo(Symbol(), MODE_TICKVALUE), MarketInfo(Symbol(), MODE_STOPLEVEL),
              MarketInfo(Symbol(), MODE_FREEZELEVEL), MarketInfo(Symbol(), MODE_SWAPLONG),
-             MarketInfo(Symbol(), MODE_SWAPSHORT), MarketInfo(Symbol(), MODE_MARGINREQUIRED),
-             MarketInfo(Symbol(), MODE_TRADEALLOWED));
+             MarketInfo(Symbol(), MODE_SWAPSHORT), MarketInfo(Symbol(), MODE_SWAPTYPE),
+             MarketInfo(Symbol(), MODE_PROFITCALCMODE), MarketInfo(Symbol(), MODE_MARGINCALCMODE),
+             MarketInfo(Symbol(), MODE_MARGINREQUIRED), MarketInfo(Symbol(), MODE_TRADEALLOWED),
+             MarketInfo(Symbol(), MODE_SPREAD), CsvSafe(AccountCurrency()),
+             "not_exposed_by_mt4_symbol_api", "not_exposed_by_mt4_symbol_api");
    FileClose(handle);
 }
 
