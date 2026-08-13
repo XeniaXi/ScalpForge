@@ -13,15 +13,16 @@ $protocolPath = (Resolve-Path -LiteralPath $Protocol).Path
 $source = (Resolve-Path -LiteralPath $SourceDir).Path
 $python = Join-Path $project ".venv\Scripts\python.exe"
 $engine = Join-Path $project ".venv\Scripts\scalpforge-run-demo-shadow.exe"
+$initializer = Join-Path $project ".venv\Scripts\scalpforge-init-demo-shadow.exe"
 $runner = Join-Path $project "ops\windows\Run-ScalpForgeDemoShadow.ps1"
 
-foreach ($required in @($python, $engine, $runner)) {
+foreach ($required in @($python, $engine, $initializer, $runner)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required file is missing: $required"
     }
 }
 
-$verification = & $python -m scalpforge_strategy.demo_shadow_protocol_cli --verify $protocolPath
+$verification = & $initializer --verify $protocolPath
 if ($LASTEXITCODE -ne 0) { throw "Protocol verification command failed." }
 $verified = $verification | ConvertFrom-Json
 if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence hashes changed." }
