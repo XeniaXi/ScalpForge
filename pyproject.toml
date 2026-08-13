@@ -38,6 +38,7 @@ scalpforge-audit-trend-candidate = "scalpforge_strategy.trend_candidate_audit_cl
 scalpforge-audit-candidate-robustness = "scalpforge_strategy.candidate_robustness_cli:main"
 scalpforge-replay-candidate-ticks = "scalpforge_strategy.candidate_tick_replay_cli:main"
 scalpforge-audit-broker-economics = "scalpforge_strategy.broker_economics_audit_cli:main"
+scalpforge-init-demo-shadow = "scalpforge_strategy.demo_shadow_protocol_cli:main"
 scalpforge-audit-gap-semantics = "scalpforge_strategy.gap_semantics_audit_cli:main"
 scalpforge-build-outcomes = "scalpforge_strategy.outcomes_cli:main"
 scalpforge-run-baselines = "scalpforge_strategy.baselines_cli:main"
