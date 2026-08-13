@@ -41,9 +41,13 @@ $action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
     -Argument $arguments `
     -WorkingDirectory $project
+$now = Get-Date
+$alignedMinute = $now.Minute - ($now.Minute % $IntervalMinutes)
+$firstRun = Get-Date -Hour $now.Hour -Minute $alignedMinute -Second 5
+if ($firstRun -le $now) { $firstRun = $firstRun.AddMinutes($IntervalMinutes) }
 $trigger = New-ScheduledTaskTrigger `
     -Once `
-    -At (Get-Date).AddMinutes(1) `
+    -At $firstRun `
     -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
 $settings = New-ScheduledTaskSettingsSet `
     -StartWhenAvailable `

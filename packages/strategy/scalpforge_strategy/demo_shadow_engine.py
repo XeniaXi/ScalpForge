@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import io
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,23 @@ class Quote:
     ask: float
 
 
+CSV_COLUMNS = [
+    "record_type",
+    "received_utc",
+    "server_time",
+    "monotonic_ms",
+    "session_id",
+    "source_sequence",
+    "broker",
+    "server",
+    "symbol",
+    "bid",
+    "ask",
+    "spread_points",
+]
+MAX_ENGINE_PROCESSING_DELAY_SECONDS = 60.0
+
+
 def run_demo_shadow(
     protocol_path: Path, source_dir: Path, lookback_days: int = 10
 ) -> dict[str, object]:
@@ -28,23 +46,38 @@ def run_demo_shadow(
         raise ValueError("unsafe protocol flags")
     root = protocol_path.resolve().parent
     state_path = root / "engine-state.json"
-    quotes = _quotes(source_dir, lookback_days)
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+    if state and state.get("source_cursors") is not None and state.get("bar_cache") is not None:
+        quotes, cursors = _incremental_quotes(source_dir, state["source_cursors"])
+        bars = _merge_bars(_restore_bars(state["bar_cache"]), _bars(quotes))
+        latest_quote = quotes[-1].at if quotes else _time(state.get("latest_quote_at"))
+    else:
+        quotes = _quotes(source_dir, lookback_days)
+        cursors = _source_cursors(source_dir, lookback_days)
+        bars = _bars(quotes)
+        latest_quote = quotes[-1].at if quotes else None
     if not quotes:
-        return _health(protocol, "no_quotes", None, 0, state_path)
-    bars = _bars(quotes)
-    complete = [bar for bar in bars if bar["available_at"] <= quotes[-1].at]
+        if latest_quote is None:
+            return _health(protocol, "no_quotes", None, 0, state_path)
+        state["source_cursors"] = cursors
+        state["bar_cache"] = _store_bars(bars)
+        _atomic_json(state_path, state)
+        return _health(protocol, "healthy_no_new_quotes", latest_quote, 0, state_path)
+    complete = [bar for bar in bars if bar["available_at"] <= latest_quote]
     now = datetime.now(UTC)
-    if not state_path.exists():
+    if state is None:
         state = {
-            "schema_version": 1,
+            "schema_version": 2,
             "started_at": now.isoformat(),
             "last_processed_bar": complete[-1]["open_at"].isoformat() if complete else None,
             "last_signal_at": None,
             "open_position": None,
+            "source_cursors": cursors,
+            "bar_cache": _store_bars(bars),
+            "latest_quote_at": latest_quote.isoformat(),
         }
         _atomic_json(state_path, state)
-        return _health(protocol, "warmup_initialized", quotes[-1].at, 0, state_path)
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+        return _health(protocol, "warmup_initialized", latest_quote, 0, state_path)
     last_processed = _time(state.get("last_processed_bar"))
     candidates = _candidates(
         complete, float(protocol["frozen_specification"]["minimum_path_efficiency"])
@@ -104,9 +137,22 @@ def run_demo_shadow(
             occupied_until is not None and candidate["available_at"] < occupied_until
         )
         disposition = "ignored_open_position" if occupied else "entry_quote_timeout"
-        entry_quote = None if occupied else _first_quote(quotes, candidate["available_at"])
         max_age = float(protocol["risk_limits"]["maximum_quote_age_seconds"])
-        if entry_quote and (entry_quote.at - candidate["available_at"]).total_seconds() <= max_age:
+        entry_quote = (
+            None
+            if occupied
+            else _live_entry_quote(
+                quotes,
+                candidate["available_at"],
+                now,
+                max_age,
+                MAX_ENGINE_PROCESSING_DELAY_SECONDS,
+            )
+        )
+        processing_delay = (now - candidate["available_at"]).total_seconds()
+        if not occupied and processing_delay > MAX_ENGINE_PROCESSING_DELAY_SECONDS:
+            disposition = "rejected_late_engine_processing"
+        elif entry_quote:
             side = int(candidate["side"])
             entry_price = entry_quote.ask if side == 1 else entry_quote.bid
             disposition = "hypothetical_entry"
@@ -131,6 +177,8 @@ def run_demo_shadow(
                     "quote_delay_seconds": (
                         entry_quote.at - candidate["available_at"]
                     ).total_seconds(),
+                    "engine_observed_at": now.isoformat(),
+                    "engine_processing_delay_seconds": processing_delay,
                     "order_submitted": False,
                 },
             )
@@ -145,6 +193,8 @@ def run_demo_shadow(
                 "h4_return_bps": candidate["h4_return_bps"],
                 "path_efficiency_1800s": candidate["path_efficiency_1800s"],
                 "disposition": disposition,
+                "engine_observed_at": now.isoformat(),
+                "engine_processing_delay_seconds": processing_delay,
                 "order_submitted": False,
             },
         )
@@ -154,8 +204,12 @@ def run_demo_shadow(
         state["last_processed_bar"] = complete[-1]["open_at"].isoformat()
     state["last_signal_at"] = last_signal_at.isoformat() if last_signal_at else None
     state["open_position"] = open_position
+    state["schema_version"] = 2
+    state["source_cursors"] = cursors
+    state["bar_cache"] = _store_bars(_trim_bars(bars, latest_quote))
+    state["latest_quote_at"] = latest_quote.isoformat()
     _atomic_json(state_path, state)
-    return _health(protocol, "healthy", quotes[-1].at, events, state_path)
+    return _health(protocol, "healthy", latest_quote, events, state_path)
 
 
 def _quotes(source_dir: Path, lookback_days: int) -> list[Quote]:
@@ -186,6 +240,52 @@ def _quotes(source_dir: Path, lookback_days: int) -> list[Quote]:
     return sorted(result, key=lambda quote: quote.at)
 
 
+def _source_cursors(source_dir: Path, lookback_days: int) -> dict[str, int]:
+    files = sorted(source_dir.glob("scalpforge_GOLD_*_ticks.csv"))[-lookback_days:]
+    return {str(path.resolve()): path.stat().st_size for path in files}
+
+
+def _incremental_quotes(
+    source_dir: Path, stored_cursors: dict[str, int]
+) -> tuple[list[Quote], dict[str, int]]:
+    cursors = dict(stored_cursors)
+    result: list[Quote] = []
+    for path in sorted(source_dir.glob("scalpforge_GOLD_*_ticks.csv")):
+        resolved = str(path.resolve())
+        size = path.stat().st_size
+        offset = int(cursors.get(resolved, 0))
+        if size < offset:
+            offset = 0
+        if size == offset:
+            continue
+        with path.open("rb") as handle:
+            handle.seek(offset)
+            payload = handle.read()
+        rows = csv.DictReader(
+            io.StringIO(payload.decode("utf-8-sig")),
+            fieldnames=CSV_COLUMNS,
+        )
+        for row in rows:
+            quote = _quote(row)
+            if quote is not None:
+                result.append(quote)
+        cursors[resolved] = size
+    return sorted(result, key=lambda quote: quote.at), cursors
+
+
+def _quote(row: dict[str, str | None]) -> Quote | None:
+    if row.get("record_type") != "tick":
+        return None
+    try:
+        bid, ask = float(row["bid"] or 0), float(row["ask"] or 0)
+        if bid <= 0 or ask < bid:
+            return None
+        at = datetime.strptime(str(row["received_utc"]), "%Y.%m.%d %H:%M:%S").replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return None
+    return Quote(at, bid, ask)
+
+
 def _bars(quotes: list[Quote]) -> list[dict[str, object]]:
     grouped: dict[datetime, list[Quote]] = {}
     for quote in quotes:
@@ -206,6 +306,53 @@ def _bars(quotes: list[Quote]) -> list[dict[str, object]]:
             }
         )
     return output
+
+
+def _merge_bars(
+    cached: list[dict[str, object]], incoming: list[dict[str, object]]
+) -> list[dict[str, object]]:
+    merged = {bar["open_at"]: bar for bar in cached}
+    for bar in incoming:
+        existing = merged.get(bar["open_at"])
+        if existing is None:
+            merged[bar["open_at"]] = bar
+        else:
+            merged[bar["open_at"]] = {
+                "open_at": existing["open_at"],
+                "available_at": existing["available_at"],
+                "open": existing["open"],
+                "close": bar["close"],
+                "high": max(float(existing["high"]), float(bar["high"])),
+                "low": min(float(existing["low"]), float(bar["low"])),
+            }
+    return [merged[key] for key in sorted(merged)]
+
+
+def _trim_bars(bars: list[dict[str, object]], latest_quote: datetime) -> list[dict[str, object]]:
+    cutoff = latest_quote - timedelta(days=10)
+    return [bar for bar in bars if bar["open_at"] >= cutoff]
+
+
+def _store_bars(bars: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            **bar,
+            "open_at": bar["open_at"].isoformat(),
+            "available_at": bar["available_at"].isoformat(),
+        }
+        for bar in bars
+    ]
+
+
+def _restore_bars(stored: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            **bar,
+            "open_at": _time(bar["open_at"]),
+            "available_at": _time(bar["available_at"]),
+        }
+        for bar in stored
+    ]
 
 
 def _candidates(
@@ -272,6 +419,72 @@ def _first_quote(quotes: list[Quote], at: datetime) -> Quote | None:
     return next((quote for quote in quotes if quote.at >= at), None)
 
 
+def _live_entry_quote(
+    quotes: list[Quote],
+    signal_at: datetime,
+    observed_at: datetime,
+    maximum_quote_age_seconds: float,
+    maximum_processing_delay_seconds: float,
+) -> Quote | None:
+    if (observed_at - signal_at).total_seconds() > maximum_processing_delay_seconds:
+        return None
+    eligible = [quote for quote in quotes if signal_at <= quote.at <= observed_at]
+    if not eligible:
+        return None
+    latest = eligible[-1]
+    if (observed_at - latest.at).total_seconds() > maximum_quote_age_seconds:
+        return None
+    return latest
+
+
+def invalidate_shadow_signal(protocol_path: Path, signal_id: str, reason: str) -> dict[str, object]:
+    verification = verify_protocol(protocol_path)
+    if verification["ready"] is not True:
+        raise ValueError("demo-shadow protocol verification failed")
+    if not reason.strip():
+        raise ValueError("an explicit invalidation reason is required")
+    protocol = json.loads(protocol_path.read_text(encoding="utf-8"))
+    state_path = protocol_path.resolve().parent / "engine-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    prior = _jsonl(Path(protocol["ledgers"]["events"]))
+    if any(
+        item.get("event") == "shadow_signal_invalidated" and item.get("signal_id") == signal_id
+        for item in prior
+    ):
+        return {"signal_id": signal_id, "status": "already_invalidated"}
+    signals = _jsonl(Path(protocol["ledgers"]["signals"]))
+    if not any(item.get("signal_id") == signal_id for item in signals):
+        raise ValueError("signal_id is not present in the frozen protocol ledger")
+    now = datetime.now(UTC).isoformat()
+    correction = {
+        "event": "shadow_signal_invalidated",
+        "signal_id": signal_id,
+        "invalidated_at": now,
+        "reason": reason.strip(),
+        "original_records_preserved": True,
+        "exclude_from_prospective_metrics": True,
+        "order_submitted": False,
+    }
+    _append(protocol["ledgers"]["events"], correction)
+    open_position = state.get("open_position")
+    if open_position and open_position.get("signal_id") == signal_id:
+        _append(
+            protocol["ledgers"]["fills"],
+            {
+                "event": "hypothetical_entry_invalidated",
+                "signal_id": signal_id,
+                "invalidated_at": now,
+                "reason": reason.strip(),
+                "cash_or_order_effect": False,
+                "order_submitted": False,
+            },
+        )
+        state["open_position"] = None
+    state.setdefault("invalidated_signal_ids", []).append(signal_id)
+    _atomic_json(state_path, state)
+    return {"signal_id": signal_id, "status": "invalidated", "state_path": str(state_path)}
+
+
 def _health(protocol, status, latest, events, state_path):
     record = {
         "checked_at": datetime.now(UTC).isoformat(),
@@ -288,6 +501,10 @@ def _health(protocol, status, latest, events, state_path):
 def _append(path, value):
     with Path(path).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(value, sort_keys=True) + "\n")
+
+
+def _jsonl(path: Path) -> list[dict[str, object]]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
 
 
 def _atomic_json(path: Path, value):
