@@ -1,0 +1,22 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+INSTALLER = ROOT / "ops" / "windows" / "Install-ScalpForgeDemoShadow.ps1"
+RUNNER = ROOT / "ops" / "windows" / "Run-ScalpForgeDemoShadow.ps1"
+
+
+def test_installer_is_read_only_and_prevents_overlap() -> None:
+    text = INSTALLER.read_text(encoding="utf-8")
+    assert "scalpforge_strategy.demo_shadow_protocol_cli --verify" in text
+    assert "-MultipleInstances IgnoreNew" in text
+    assert 'TaskName "ScalpForge-Demo-Shadow"' in text
+    assert "OrderSend" not in text
+    assert "submitOrder" not in text
+
+
+def test_runner_persists_output_and_uses_frozen_engine() -> None:
+    text = RUNNER.read_text(encoding="utf-8")
+    assert "scalpforge-run-demo-shadow.exe" in text
+    assert "Out-File -LiteralPath $log -Append" in text
+    assert "order_submission_enabled = $false" in text
+    assert "Start-Process" not in text

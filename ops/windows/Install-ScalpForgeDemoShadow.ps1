@@ -1,0 +1,67 @@
+param(
+    [Parameter(Mandatory = $true)] [string] $ProjectRoot,
+    [Parameter(Mandatory = $true)] [string] $Protocol,
+    [Parameter(Mandatory = $true)] [string] $SourceDir,
+    [int] $IntervalMinutes = 5
+)
+
+$ErrorActionPreference = "Stop"
+if ($IntervalMinutes -lt 5) { throw "IntervalMinutes must be at least 5." }
+
+$project = (Resolve-Path -LiteralPath $ProjectRoot).Path
+$protocolPath = (Resolve-Path -LiteralPath $Protocol).Path
+$source = (Resolve-Path -LiteralPath $SourceDir).Path
+$python = Join-Path $project ".venv\Scripts\python.exe"
+$engine = Join-Path $project ".venv\Scripts\scalpforge-run-demo-shadow.exe"
+$runner = Join-Path $project "ops\windows\Run-ScalpForgeDemoShadow.ps1"
+
+foreach ($required in @($python, $engine, $runner)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        throw "Required file is missing: $required"
+    }
+}
+
+$verification = & $python -m scalpforge_strategy.demo_shadow_protocol_cli --verify $protocolPath
+if ($LASTEXITCODE -ne 0) { throw "Protocol verification command failed." }
+$verified = $verification | ConvertFrom-Json
+if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence hashes changed." }
+
+$arguments = @(
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-File", ('"' + $runner + '"'),
+    "-ProjectRoot", ('"' + $project + '"'),
+    "-Protocol", ('"' + $protocolPath + '"'),
+    "-SourceDir", ('"' + $source + '"')
+) -join " "
+
+$action = New-ScheduledTaskAction `
+    -Execute "powershell.exe" `
+    -Argument $arguments `
+    -WorkingDirectory $project
+$trigger = New-ScheduledTaskTrigger `
+    -Once `
+    -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+$settings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable `
+    -MultipleInstances IgnoreNew `
+    -RestartCount 3 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 4)
+
+Register-ScheduledTask `
+    -TaskName "ScalpForge-Demo-Shadow" `
+    -Action $action `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Description "Read-only Candidate A AvaTrade demo shadow; hypothetical fills only; never trades" `
+    -Force | Out-Null
+
+Write-Host "Installed read-only demo-shadow task."
+Write-Host "Task: ScalpForge-Demo-Shadow"
+Write-Host "Interval: $IntervalMinutes minutes"
+Write-Host "Protocol: $protocolPath"
+Write-Host "Source: $source"
+Write-Host "Overlapping task runs are ignored. No order submission is enabled."
