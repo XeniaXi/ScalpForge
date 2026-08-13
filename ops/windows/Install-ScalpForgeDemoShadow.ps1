@@ -12,11 +12,10 @@ $project = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $protocolPath = (Resolve-Path -LiteralPath $Protocol).Path
 $source = (Resolve-Path -LiteralPath $SourceDir).Path
 $python = Join-Path $project ".venv\Scripts\python.exe"
-$engine = Join-Path $project ".venv\Scripts\scalpforge-run-demo-shadow.exe"
+$engine = Join-Path $project ".venv\Scripts\scalpforge-run-demo-shadow-scheduled.exe"
 $initializer = Join-Path $project ".venv\Scripts\scalpforge-init-demo-shadow.exe"
-$runner = Join-Path $project "ops\windows\Run-ScalpForgeDemoShadow.ps1"
 
-foreach ($required in @($python, $engine, $initializer, $runner)) {
+foreach ($required in @($python, $engine, $initializer)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required file is missing: $required"
     }
@@ -28,17 +27,12 @@ $verified = $verification | ConvertFrom-Json
 if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence hashes changed." }
 
 $arguments = @(
-    "-NoProfile",
-    "-NonInteractive",
-    "-ExecutionPolicy", "Bypass",
-    "-File", ('"' + $runner + '"'),
-    "-ProjectRoot", ('"' + $project + '"'),
     "-Protocol", ('"' + $protocolPath + '"'),
     "-SourceDir", ('"' + $source + '"')
 ) -join " "
 
 $action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
+    -Execute $engine `
     -Argument $arguments `
     -WorkingDirectory $project
 $now = Get-Date
