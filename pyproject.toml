@@ -36,6 +36,7 @@ scalpforge-build-gold-strategy-episodes = "scalpforge_strategy.gold_strategy_epi
 scalpforge-run-gold-strategy-tournament = "scalpforge_strategy.gold_strategy_tournament_cli:main"
 scalpforge-audit-trend-candidate = "scalpforge_strategy.trend_candidate_audit_cli:main"
 scalpforge-audit-candidate-robustness = "scalpforge_strategy.candidate_robustness_cli:main"
+scalpforge-replay-candidate-ticks = "scalpforge_strategy.candidate_tick_replay_cli:main"
 scalpforge-audit-gap-semantics = "scalpforge_strategy.gap_semantics_audit_cli:main"
 scalpforge-build-outcomes = "scalpforge_strategy.outcomes_cli:main"
 scalpforge-run-baselines = "scalpforge_strategy.baselines_cli:main"
