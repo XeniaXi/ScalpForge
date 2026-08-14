@@ -27,8 +27,8 @@ if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence ha
 
 $arguments = @(
     "-m", "scalpforge_strategy.demo_shadow_scheduled_cli",
-    "-Protocol", ('"' + $protocolPath + '"'),
-    "-SourceDir", ('"' + $source + '"')
+    "--protocol", ('"' + $protocolPath + '"'),
+    "--source-dir", ('"' + $source + '"')
 ) -join " "
 
 $action = New-ScheduledTaskAction `

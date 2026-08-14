@@ -10,6 +10,8 @@ def test_installer_is_read_only_and_prevents_overlap() -> None:
     assert "scalpforge-init-demo-shadow.exe" in text
     assert '"-m", "scalpforge_strategy.demo_shadow_scheduled_cli"' in text
     assert "-Execute $python" in text
+    assert '"--protocol"' in text
+    assert '"--source-dir"' in text
     assert "$verification = & $initializer --verify $protocolPath" in text
     assert "python -m scalpforge_strategy.demo_shadow_protocol_cli" not in text
     assert "-MultipleInstances IgnoreNew" in text
