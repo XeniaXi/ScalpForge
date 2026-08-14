@@ -47,6 +47,10 @@ def run_demo_shadow(
     root = protocol_path.resolve().parent
     state_path = root / "engine-state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else None
+    if protocol.get("bootstrap_certificate") is not None:
+        from .demo_shadow_rollover import verify_bootstrap
+
+        verify_bootstrap(protocol_path, state)
     if state and state.get("source_cursors") is not None and state.get("bar_cache") is not None:
         quotes, cursors = _incremental_quotes(source_dir, state["source_cursors"])
         bars = _merge_bars(_restore_bars(state["bar_cache"]), _bars(quotes))
