@@ -15,6 +15,8 @@ def test_installer_is_read_only_and_prevents_overlap() -> None:
     assert "$verification = & $initializer --verify $protocolPath" in text
     assert "python -m scalpforge_strategy.demo_shadow_protocol_cli" not in text
     assert "-MultipleInstances IgnoreNew" in text
+    assert "-AllowStartIfOnBatteries" in text
+    assert "-DontStopIfGoingOnBatteries" in text
     assert "-Second 5" in text
     assert 'TaskName "ScalpForge-Demo-Shadow"' in text
     assert "OrderSend" not in text
