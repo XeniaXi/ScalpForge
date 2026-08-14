@@ -6,9 +6,6 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from .demo_shadow_engine import run_demo_shadow
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the read-only demo shadow from a scheduler")
     parser.add_argument("--protocol", type=Path, required=True)
@@ -44,7 +41,16 @@ def run_scheduled(protocol_path: Path, source_dir: Path) -> dict[str, object]:
         },
     )
     try:
-        output = run_demo_shadow(protocol_path, source_dir)
+        _append(
+            log_path,
+            {
+                "invoked_at_utc": datetime.now(UTC).isoformat(),
+                "event": "loading_engine",
+                "pid": os.getpid(),
+                "order_submission_enabled": False,
+            },
+        )
+        output = _run_engine(protocol_path, source_dir)
         result = {
             "invoked_at_utc": datetime.now(UTC).isoformat(),
             "event": "completed",
@@ -71,6 +77,15 @@ def run_scheduled(protocol_path: Path, source_dir: Path) -> dict[str, object]:
     finally:
         os.close(lock_fd)
         lock_path.unlink(missing_ok=True)
+
+
+def _run_engine(protocol_path: Path, source_dir: Path) -> dict[str, object]:
+    # Keep the heavy engine import behind the first durable scheduler checkpoints.
+    # If a Windows task stalls during dependency import, the log now identifies it
+    # instead of leaving no evidence that the Python process reached our code.
+    from .demo_shadow_engine import run_demo_shadow
+
+    return run_demo_shadow(protocol_path, source_dir)
 
 
 def _acquire_lock(path: Path) -> int | None:

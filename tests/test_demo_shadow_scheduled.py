@@ -10,7 +10,7 @@ def test_scheduled_runner_records_start_and_completion(tmp_path, monkeypatch) ->
     source.mkdir()
     monkeypatch.setattr(
         scheduled,
-        "run_demo_shadow",
+        "_run_engine",
         lambda protocol_path, source_dir: {
             "status": "healthy",
             "order_submission_enabled": False,
@@ -22,7 +22,7 @@ def test_scheduled_runner_records_start_and_completion(tmp_path, monkeypatch) ->
         json.loads(line)
         for line in next((tmp_path / "logs").glob("*.jsonl")).read_text().splitlines()
     ]
-    assert [row["event"] for row in rows] == ["started", "completed"]
+    assert [row["event"] for row in rows] == ["started", "loading_engine", "completed"]
     assert all(row["order_submission_enabled"] is False for row in rows)
     assert not (tmp_path / "scheduled-run.lock").exists()
 
