@@ -30,7 +30,11 @@ def replay_avatrade_candidate(
     files = sorted(source_dir.glob("scalpforge_GOLD_*_ticks.csv"))
     if not files:
         raise ValueError(f"no AvaTrade tick exports found in {source_dir}")
+    source_hashes_before = {str(path.resolve()): _sha256(path) for path in files}
     quotes, duplicates, invalid_rows = _read_quotes(files, start, end_exclusive)
+    source_hashes = {str(path.resolve()): _sha256(path) for path in files}
+    if source_hashes != source_hashes_before:
+        raise ValueError("AvaTrade export changed during replay; retry against a stable snapshot")
     if not quotes:
         raise ValueError("no valid quotes in the requested replay interval")
 
@@ -44,7 +48,6 @@ def replay_avatrade_candidate(
         float(protocol["risk_limits"]["maximum_quote_age_seconds"]),
     )
 
-    source_hashes = {str(path.resolve()): _sha256(path) for path in files}
     replay_key = json.dumps(
         {
             "candidate_specification_hash": spec["candidate_specification_hash"],
