@@ -53,8 +53,21 @@ def test_evaluator_excludes_invalidated_trade_and_reports_collecting(tmp_path) -
     _write_jsonl(
         tmp_path / "signals.jsonl",
         [
-            {"signal_id": "keep", "disposition": "hypothetical_entry"},
-            {"signal_id": "drop", "disposition": "hypothetical_entry"},
+            {
+                "signal_id": "keep",
+                "disposition": "hypothetical_entry",
+                "engine_observed_at": now.isoformat(),
+            },
+            {
+                "signal_id": "drop",
+                "disposition": "hypothetical_entry",
+                "engine_observed_at": now.isoformat(),
+            },
+            {
+                "signal_id": "legacy",
+                "disposition": "entry_quote_timeout",
+                "engine_observed_at": (now - timedelta(days=1)).isoformat(),
+            },
         ],
     )
     _write_jsonl(
@@ -65,6 +78,7 @@ def test_evaluator_excludes_invalidated_trade_and_reports_collecting(tmp_path) -
                 "signal_id": "keep",
                 "side": 1,
                 "occurred_at": now.isoformat(),
+                "engine_observed_at": now.isoformat(),
             },
             {
                 "event": "hypothetical_exit",
@@ -78,6 +92,7 @@ def test_evaluator_excludes_invalidated_trade_and_reports_collecting(tmp_path) -
                 "signal_id": "drop",
                 "side": -1,
                 "occurred_at": now.isoformat(),
+                "engine_observed_at": now.isoformat(),
             },
             {
                 "event": "hypothetical_exit",
@@ -108,6 +123,7 @@ def test_evaluator_excludes_invalidated_trade_and_reports_collecting(tmp_path) -
     assert report["metrics"]["closed_trades"] == 1
     assert report["metrics"]["mean_net_bps"] == 4.0
     assert report["metrics"]["invalidated_signals_excluded"] == 1
+    assert report["metrics"]["pre_audit_signals_excluded"] == 1
     assert report["gate_results"]["maximum_drawdown_pct"] is None
     assert report["order_submission_enabled"] is False
     assert len((tmp_path / "weekly-evaluations.jsonl").read_text().splitlines()) == 1

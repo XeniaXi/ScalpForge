@@ -38,18 +38,27 @@ def evaluate_demo_shadow(protocol_path: Path) -> dict[str, object]:
     health = _jsonl(ledger_paths["health"])
     events = _jsonl(ledger_paths["events"])
     worker_rows = [row for path in worker_logs for row in _jsonl(path)]
+    audit_start = _audit_start(protocol, worker_rows, health)
     invalid = {
         str(row["signal_id"])
         for row in events
         if row.get("event") == "shadow_signal_invalidated"
         and row.get("exclude_from_prospective_metrics") is True
     }
-    valid_signals = [row for row in signals if str(row.get("signal_id")) not in invalid]
+    prospective_signals = [
+        row
+        for row in signals
+        if _at_or_after(row.get("engine_observed_at"), audit_start)
+    ]
+    valid_signals = [
+        row for row in prospective_signals if str(row.get("signal_id")) not in invalid
+    ]
     valid_fills = [row for row in fills if str(row.get("signal_id")) not in invalid]
     entries = {
         str(row["signal_id"]): row
         for row in valid_fills
         if row.get("event") == "hypothetical_entry"
+        and _at_or_after(row.get("engine_observed_at"), audit_start)
     }
     exits = {
         str(row["signal_id"]): row
@@ -70,7 +79,6 @@ def evaluate_demo_shadow(protocol_path: Path) -> dict[str, object]:
     ]
     trades.sort(key=lambda row: str(row["entry_at"]))
 
-    audit_start = _audit_start(protocol, worker_rows, health)
     weeks = max(0.0, (evaluated_at - audit_start).total_seconds() / (7 * 86_400))
     nets = [float(row["net_bps"]) for row in trades]
     daily = _daily_values(trades)
@@ -115,7 +123,10 @@ def evaluate_demo_shadow(protocol_path: Path) -> dict[str, object]:
         "first_half_mean_net_bps": _mean(nets[: len(nets) // 2]) if len(nets) >= 2 else None,
         "second_half_mean_net_bps": _mean(nets[len(nets) // 2 :]) if len(nets) >= 2 else None,
         "unresolved_data_or_execution_failures": unresolved_failures,
-        "invalidated_signals_excluded": len(invalid),
+        "invalidated_signals_excluded": sum(
+            str(row.get("signal_id")) in invalid for row in prospective_signals
+        ),
+        "pre_audit_signals_excluded": len(signals) - len(prospective_signals),
         "open_hypothetical_positions": len(set(entries) - set(exits)),
     }
     gate_results = _gates(protocol["acceptance_gates"], metrics)
@@ -217,6 +228,10 @@ def _audit_start(protocol, worker_rows, health):
         return min(starts)
     checks = [datetime.fromisoformat(str(row["checked_at"])) for row in health]
     return min(checks) if checks else datetime.fromisoformat(protocol["created_at"])
+
+
+def _at_or_after(value, boundary):
+    return bool(value) and datetime.fromisoformat(str(value)) >= boundary
 
 
 def _daily_values(trades):
