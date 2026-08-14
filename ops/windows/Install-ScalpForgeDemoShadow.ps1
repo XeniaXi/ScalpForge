@@ -12,10 +12,9 @@ $project = (Resolve-Path -LiteralPath $ProjectRoot).Path
 $protocolPath = (Resolve-Path -LiteralPath $Protocol).Path
 $source = (Resolve-Path -LiteralPath $SourceDir).Path
 $python = Join-Path $project ".venv\Scripts\python.exe"
-$engine = Join-Path $project ".venv\Scripts\scalpforge-run-demo-shadow-scheduled.exe"
 $initializer = Join-Path $project ".venv\Scripts\scalpforge-init-demo-shadow.exe"
 
-foreach ($required in @($python, $engine, $initializer)) {
+foreach ($required in @($python, $initializer)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Required file is missing: $required"
     }
@@ -27,12 +26,13 @@ $verified = $verification | ConvertFrom-Json
 if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence hashes changed." }
 
 $arguments = @(
+    "-m", "scalpforge_strategy.demo_shadow_scheduled_cli",
     "-Protocol", ('"' + $protocolPath + '"'),
     "-SourceDir", ('"' + $source + '"')
 ) -join " "
 
 $action = New-ScheduledTaskAction `
-    -Execute $engine `
+    -Execute $python `
     -Argument $arguments `
     -WorkingDirectory $project
 $now = Get-Date
