@@ -47,7 +47,9 @@ def audit_candidate_parity(
     incremental_only = [row for row in incremental_signatures if row not in batch_signatures]
 
     live_rows = _jsonl(Path(protocol["ledgers"]["signals"]))
-    live_attribution = _attribute_live(live_rows, batch_signatures)
+    live_attribution = _attribute_live(
+        live_rows, batch_signatures, quotes[0].at, quotes[-1].at
+    )
     key = json.dumps(
         {
             "candidate_specification_hash": spec["candidate_specification_hash"],
@@ -154,16 +156,28 @@ def _signature(row: dict[str, object]) -> dict[str, object]:
 
 
 def _attribute_live(
-    rows: list[dict[str, object]], canonical: list[dict[str, object]]
+    rows: list[dict[str, object]],
+    canonical: list[dict[str, object]],
+    snapshot_start: datetime,
+    snapshot_end: datetime,
 ) -> dict[str, object]:
     canonical_keys = {
         (str(row["feature_available_at"]), int(row["side"])) for row in canonical
     }
     details = []
     matched = 0
+    comparable = 0
+    outside = 0
     for row in rows:
         key = (str(row.get("feature_available_at")), int(row.get("side", 0)))
-        is_match = key in canonical_keys
+        try:
+            feature_at = datetime.fromisoformat(str(row.get("feature_available_at")))
+            in_snapshot = snapshot_start <= feature_at <= snapshot_end
+        except ValueError:
+            in_snapshot = False
+        is_match = in_snapshot and key in canonical_keys
+        comparable += int(in_snapshot)
+        outside += int(not in_snapshot)
         matched += int(is_match)
         details.append(
             {
@@ -171,13 +185,16 @@ def _attribute_live(
                 "side": row.get("side"),
                 "disposition": row.get("disposition"),
                 "engine_observed_at": row.get("engine_observed_at"),
+                "comparison_scope": "in_snapshot" if in_snapshot else "outside_snapshot",
                 "canonical_match": is_match,
             }
         )
     return {
         "live_signal_count": len(rows),
+        "comparable_live_signals": comparable,
+        "out_of_snapshot_live_signals": outside,
         "canonical_matches": matched,
-        "unmatched_live_signals": len(rows) - matched,
+        "unmatched_comparable_live_signals": comparable - matched,
         "details": details,
         "note": "legacy and late-reconstructed live rows are attribution only",
     }

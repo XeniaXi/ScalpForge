@@ -35,6 +35,24 @@ def test_live_attribution_does_not_promote_unmatched_legacy_signal() -> None:
             "disposition": "rejected_late_engine_processing",
         }
     ]
-    result = _attribute_live(live, canonical)
+    result = _attribute_live(
+        live,
+        canonical,
+        datetime(2026, 8, 14, tzinfo=UTC),
+        datetime(2026, 8, 14, 12, tzinfo=UTC),
+    )
     assert result["canonical_matches"] == 0
-    assert result["unmatched_live_signals"] == 1
+    assert result["unmatched_comparable_live_signals"] == 1
+
+
+def test_live_attribution_separates_signal_after_snapshot() -> None:
+    live = [{"feature_available_at": "2026-08-14T16:00:00+00:00", "side": 1}]
+    result = _attribute_live(
+        live,
+        [],
+        datetime(2026, 8, 14, tzinfo=UTC),
+        datetime(2026, 8, 14, 13, 51, 48, tzinfo=UTC),
+    )
+    assert result["comparable_live_signals"] == 0
+    assert result["out_of_snapshot_live_signals"] == 1
+    assert result["unmatched_comparable_live_signals"] == 0
