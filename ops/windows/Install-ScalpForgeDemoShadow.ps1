@@ -26,9 +26,10 @@ $verified = $verification | ConvertFrom-Json
 if ($verified.ready -ne $true) { throw "Protocol is not ready or its evidence hashes changed." }
 
 $arguments = @(
-    "-m", "scalpforge_strategy.demo_shadow_scheduled_cli",
+    "-m", "scalpforge_strategy.demo_shadow_worker_cli",
     "--protocol", ('"' + $protocolPath + '"'),
-    "--source-dir", ('"' + $source + '"')
+    "--source-dir", ('"' + $source + '"'),
+    "--interval-seconds", ($IntervalMinutes * 60)
 ) -join " "
 
 $action = New-ScheduledTaskAction `
@@ -50,7 +51,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
-    -ExecutionTimeLimit (New-TimeSpan -Minutes 4)
+    -ExecutionTimeLimit ([TimeSpan]::Zero)
 
 Register-ScheduledTask `
     -TaskName "ScalpForge-Demo-Shadow" `
@@ -65,4 +66,4 @@ Write-Host "Task: ScalpForge-Demo-Shadow"
 Write-Host "Interval: $IntervalMinutes minutes"
 Write-Host "Protocol: $protocolPath"
 Write-Host "Source: $source"
-Write-Host "Overlapping task runs are ignored. No order submission is enabled."
+Write-Host "Persistent worker; Task Scheduler should remain Running. No order submission is enabled."

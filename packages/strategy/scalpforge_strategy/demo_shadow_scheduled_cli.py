@@ -6,6 +6,7 @@ import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the read-only demo shadow from a scheduler")
     parser.add_argument("--protocol", type=Path, required=True)

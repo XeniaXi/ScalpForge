@@ -41,6 +41,7 @@ scalpforge-audit-broker-economics = "scalpforge_strategy.broker_economics_audit_
 scalpforge-init-demo-shadow = "scalpforge_strategy.demo_shadow_protocol_cli:main"
 scalpforge-run-demo-shadow = "scalpforge_strategy.demo_shadow_engine_cli:main"
 scalpforge-run-demo-shadow-scheduled = "scalpforge_strategy.demo_shadow_scheduled_cli:main"
+scalpforge-run-demo-shadow-worker = "scalpforge_strategy.demo_shadow_worker_cli:main"
 scalpforge-audit-gap-semantics = "scalpforge_strategy.gap_semantics_audit_cli:main"
 scalpforge-build-outcomes = "scalpforge_strategy.outcomes_cli:main"
 scalpforge-run-baselines = "scalpforge_strategy.baselines_cli:main"
