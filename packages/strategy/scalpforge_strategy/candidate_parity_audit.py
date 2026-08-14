@@ -54,7 +54,7 @@ def audit_candidate_parity(
         {
             "candidate_specification_hash": spec["candidate_specification_hash"],
             "source_hashes": hashes_after,
-            "audit_revision": 1,
+            "audit_revision": 2,
         },
         sort_keys=True,
     )
@@ -69,6 +69,7 @@ def audit_candidate_parity(
     report: dict[str, object] = {
         "report_id": report_id,
         "schema_version": 1,
+        "audit_revision": 2,
         "created_at": datetime.now(UTC).isoformat(),
         "candidate_id": spec["candidate_id"],
         "candidate_specification_hash": spec["candidate_specification_hash"],
