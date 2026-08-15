@@ -179,7 +179,10 @@ def _shock_signals(bars: list[dict[str, object]]) -> list[dict[str, object]]:
         efficiency = abs(end - start) / path if path else 0.0
         if abs(shock) < threshold or efficiency < float(cfg["minimum_efficiency"]):
             continue
-        candidates.append(_signal(bars[index], 1 if shock > 0 else -1, shock, efficiency))
+        candidate = _signal(bars[index], 1 if shock > 0 else -1, shock, efficiency)
+        candidate["shock_threshold_bps"] = threshold
+        candidate["shock_margin_ratio"] = abs(shock) / threshold
+        candidates.append(candidate)
     return _cooldown(candidates, int(cfg["cooldown_seconds"]))
 
 
