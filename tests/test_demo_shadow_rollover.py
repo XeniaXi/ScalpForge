@@ -17,8 +17,25 @@ def test_exact_live_handoff_rejects_changed_export(tmp_path: Path) -> None:
     name = "scalpforge_GOLD_20260814_ticks.csv"
     (snapshot / name).write_text("one", encoding="utf-8")
     (live / name).write_text("two", encoding="utf-8")
-    with pytest.raises(ValueError, match="changed after the snapshot"):
+    with pytest.raises(ValueError, match="do not preserve the snapshot prefix"):
         _validate_exact_live_handoff([snapshot / name], live)
+
+
+def test_exact_live_handoff_accepts_appended_export_and_uses_snapshot_cursor(
+    tmp_path: Path,
+) -> None:
+    snapshot = tmp_path / "snapshot"
+    live = tmp_path / "live"
+    snapshot.mkdir()
+    live.mkdir()
+    name = "scalpforge_GOLD_20260814_ticks.csv"
+    (snapshot / name).write_bytes(b"snapshot\n")
+    (live / name).write_bytes(b"snapshot\nappended\n")
+
+    files, cursors = _validate_exact_live_handoff([snapshot / name], live)
+
+    assert files == [live / name]
+    assert cursors[str((live / name).resolve())] == len(b"snapshot\n")
 
 
 def test_bootstrap_certificate_must_match_state(tmp_path: Path) -> None:

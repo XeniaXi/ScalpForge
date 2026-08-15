@@ -194,14 +194,32 @@ def _validate_exact_live_handoff(
         live = live_source_dir / snapshot.name
         if not live.exists():
             raise ValueError(f"live source is missing {snapshot.name}")
-        if live.stat().st_size != snapshot.stat().st_size or _sha256(live) != _sha256(snapshot):
+        snapshot_size = snapshot.stat().st_size
+        if live.stat().st_size < snapshot_size or _prefix_sha256(live, snapshot_size) != _sha256(
+            snapshot
+        ):
             raise ValueError(
-                "live exporter files changed after the snapshot; "
+                "live exporter files do not preserve the snapshot prefix; "
                 "capture a new snapshot and parity report"
             )
         live_files.append(live)
-        cursors[str(live.resolve())] = live.stat().st_size
+        cursors[str(live.resolve())] = snapshot_size
     return live_files, cursors
+
+
+def _prefix_sha256(path: Path, size: int) -> str:
+    digest = hashlib.sha256()
+    remaining = size
+    with path.open("rb") as handle:
+        while remaining:
+            chunk = handle.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+    if remaining:
+        raise ValueError(f"live source ended before the snapshot cursor: {path.name}")
+    return digest.hexdigest()
 
 
 def _diagnose_parent_state(
